@@ -1,0 +1,6 @@
+{
+  "name": "GeoSmart",
+  "description": "Individual relationship foundation connecting identity, family, community, and places.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

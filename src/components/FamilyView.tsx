@@ -1,0 +1,1416 @@
+import React, { useState, useEffect } from 'react';
+import { useAuth } from './AuthContext.tsx';
+import {
+  Users,
+  Plus,
+  Trash2,
+  MapPin,
+  Lock,
+  Share2,
+  Globe,
+  AlertCircle,
+  CheckCircle2,
+  Layers,
+  LayoutGrid,
+  GitFork,
+  GitBranch,
+  Mail,
+} from 'lucide-react';
+import type {
+  FamilyMemberWithPerson,
+  FamilyTreeGraph,
+  FamilyTreeNode,
+  RelationshipType,
+  VisibilitySetting,
+} from '../types.ts';
+import { FamilyTreeCanvas } from './FamilyTreeCanvas.tsx';
+import { FamilyMemberDetailModal } from './FamilyMemberDetailModal.tsx';
+import { KinshipDiscoveryBanner } from './KinshipDiscoveryBanner.tsx';
+import { FamilyInvitationsModal } from './FamilyInvitationsModal.tsx';
+import { useInvitationNotifications } from './InvitationNotificationsContext.tsx';
+import { familyGenderOptions, getRelationshipLabel, getRelationshipOptions } from '../lib/family-relationships.ts';
+
+interface FamilyViewProps {
+  activeSubView?: 'overview' | 'tree' | 'invitations';
+  onSubViewChange?: (view: 'overview' | 'tree' | 'invitations') => void;
+}
+
+interface StandardLocationOption {
+  id: number;
+  name: string;
+  country: string;
+  countryCode: string;
+  stateRegion: string | null;
+  stateCode: string | null;
+}
+
+interface StandardCountryOption {
+  id: number;
+  code: string;
+  name: string;
+}
+
+interface StandardRegionOption {
+  id: number;
+  code: string;
+  name: string;
+}
+
+type FamilyOverviewView =
+  | 'all'
+  | 'spouse'
+  | 'spouse_children'
+  | 'children'
+  | 'parents_siblings'
+  | 'siblings'
+  | 'ancestors'
+  | 'descendants'
+  | 'extended';
+
+interface FamilyOverviewHierarchyTier {
+  label: string;
+  members: FamilyMemberWithPerson[];
+  includeSelf?: boolean;
+  connectsToPrevious?: boolean;
+  note?: string;
+}
+
+const familyOverviewViews: Array<{ id: FamilyOverviewView; label: string }> = [
+  { id: 'all', label: 'All connections' },
+  { id: 'spouse', label: 'Spouse / partner' },
+  { id: 'spouse_children', label: 'Spouse / partner and children' },
+  { id: 'children', label: 'Children' },
+  { id: 'parents_siblings', label: 'Parents and siblings' },
+  { id: 'siblings', label: 'Siblings' },
+  { id: 'ancestors', label: 'Ancestors' },
+  { id: 'descendants', label: 'Descendants' },
+  { id: 'extended', label: 'Extended family' },
+];
+
+const familyOverviewRelationships: Record<FamilyOverviewView, RelationshipType[] | null> = {
+  all: null,
+  spouse: ['spouse'],
+  spouse_children: ['spouse', 'child'],
+  children: ['child'],
+  parents_siblings: ['parent', 'sibling'],
+  siblings: ['sibling'],
+  ancestors: ['parent', 'grandparent'],
+  descendants: ['child', 'grandchild'],
+  extended: ['relative', 'other'],
+};
+
+export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubViewChange }) => {
+  const { idToken, refreshOverview } = useAuth();
+  const { pendingCount, hasUnreadActivity, alertsEnabled, markInvitationActivityRead, refreshInvitationNotifications } = useInvitationNotifications();
+
+  // Sub-view: 'overview' (My Family page with Family Overview) vs 'tree' (visual tree entry point)
+  const [internalSubView, setInternalSubView] = useState<'overview' | 'tree' | 'invitations'>('overview');
+  const subView = activeSubView ?? internalSubView;
+  const setSubView = (view: 'overview' | 'tree' | 'invitations') => {
+    if (activeSubView === undefined) setInternalSubView(view);
+    onSubViewChange?.(view);
+  };
+
+  // Keep the three tree presentations together in one page-level selector.
+  const [familyDisplayMode, setFamilyDisplayMode] = useState<'tree' | 'lineage' | 'list'>('tree');
+  const [cardDensity, setCardDensity] = useState<'compact' | 'comfortable'>('compact');
+  const [familyOverviewView, setFamilyOverviewView] = useState<FamilyOverviewView>('all');
+
+  // Data states
+  const [treeData, setTreeData] = useState<FamilyTreeGraph | null>(null);
+  const [members, setMembers] = useState<FamilyMemberWithPerson[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Modals
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [showInvitationsModal, setShowInvitationsModal] = useState(false);
+  const [selectedNode, setSelectedNode] = useState<FamilyTreeNode | null>(null);
+
+  // Notifications
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // In-app Disconnect Confirmation Modal
+  const [disconnectTarget, setDisconnectTarget] = useState<{ id: number; name: string } | null>(null);
+  const [disconnecting, setDisconnecting] = useState(false);
+
+  // Add Member Form states
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [otherNames, setOtherNames] = useState('');
+  const [gender, setGender] = useState('unspecified');
+  const [relationshipType, setRelationshipType] = useState<RelationshipType>('parent');
+  const [originCountries, setOriginCountries] = useState<StandardCountryOption[]>([]);
+  const [originRegions, setOriginRegions] = useState<StandardRegionOption[]>([]);
+  const [originPlaces, setOriginPlaces] = useState<StandardLocationOption[]>([]);
+  const [originCountryCode, setOriginCountryCode] = useState('');
+  const [originRegionId, setOriginRegionId] = useState('');
+  const [originPlaceId, setOriginPlaceId] = useState('');
+  const [originCountriesLoading, setOriginCountriesLoading] = useState(false);
+  const [originRegionsLoading, setOriginRegionsLoading] = useState(false);
+  const [originPlacesLoading, setOriginPlacesLoading] = useState(false);
+  const [originLocationError, setOriginLocationError] = useState<string | null>(null);
+  const [notes, setNotes] = useState('');
+  const [visibility, setVisibility] = useState<VisibilitySetting>('private');
+  const [submitting, setSubmitting] = useState(false);
+
+  // Load Tree & Members
+  const loadFamilyData = async () => {
+    if (!idToken) return;
+    setLoading(true);
+    try {
+      // 1. Fetch visual tree graph
+      const treeRes = await fetch('/api/family/tree', {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      if (treeRes.ok) {
+        const tData: FamilyTreeGraph = await treeRes.json();
+        setTreeData(tData);
+      }
+
+      // 2. Fetch flat members list for list mode
+      const listRes = await fetch('/api/family', {
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      if (listRes.ok) {
+        const lData: FamilyMemberWithPerson[] = await listRes.json();
+        setMembers(lData);
+      }
+    } catch (err) {
+      console.error('Failed to load family data:', err);
+      setErrorMsg('Failed to load family connections.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadFamilyData();
+  }, [idToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setOriginCountriesLoading(true);
+    fetch('/api/locations/countries')
+      .then(async (res) => {
+        if (!res.ok) throw new Error('Failed to load countries');
+        return res.json() as Promise<StandardCountryOption[]>;
+      })
+      .then((countries) => { if (!cancelled) setOriginCountries(countries); })
+      .catch((error) => {
+        console.error('Failed to load standard countries:', error);
+        if (!cancelled) setOriginLocationError('Could not load the location list. Please try again.');
+      })
+      .finally(() => { if (!cancelled) setOriginCountriesLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!originCountryCode) {
+      setOriginRegions([]);
+      setOriginRegionsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setOriginRegionsLoading(true);
+    fetch(`/api/locations/regions?countryCode=${encodeURIComponent(originCountryCode)}`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error('Failed to load regions');
+        return res.json() as Promise<StandardRegionOption[]>;
+      })
+      .then((regions) => { if (!cancelled) setOriginRegions(regions); })
+      .catch((error) => {
+        console.error('Failed to load standard regions:', error);
+        if (!cancelled) setOriginLocationError('Could not load regions for this country.');
+      })
+      .finally(() => { if (!cancelled) setOriginRegionsLoading(false); });
+    return () => { cancelled = true; };
+  }, [originCountryCode]);
+
+  useEffect(() => {
+    if (!originCountryCode || originRegionsLoading || (originRegions.length > 0 && !originRegionId)) {
+      setOriginPlaces([]);
+      setOriginPlacesLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setOriginPlacesLoading(true);
+    const regionQuery = originRegionId ? `&regionId=${encodeURIComponent(originRegionId)}` : '';
+    fetch(`/api/locations/places?countryCode=${encodeURIComponent(originCountryCode)}${regionQuery}`)
+      .then(async (res) => {
+        if (!res.ok) throw new Error('Failed to load populated places');
+        return res.json() as Promise<StandardLocationOption[]>;
+      })
+      .then((places) => { if (!cancelled) setOriginPlaces(places); })
+      .catch((error) => {
+        console.error('Failed to load standard places:', error);
+        if (!cancelled) setOriginLocationError('Could not load places for this area.');
+      })
+      .finally(() => { if (!cancelled) setOriginPlacesLoading(false); });
+    return () => { cancelled = true; };
+  }, [originCountryCode, originRegionId, originRegions, originRegionsLoading]);
+
+  const handleAddMember = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!idToken) return;
+    setSubmitting(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    try {
+      const selectedOrigin = originPlaces.find((place) => String(place.id) === originPlaceId);
+      const res = await fetch('/api/family', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          otherNames: otherNames.trim() || undefined,
+          gender,
+          relationshipType,
+          notes: notes.trim() || undefined,
+          visibility,
+          placeOfOrigin: selectedOrigin
+            ? {
+                name: selectedOrigin.name,
+                country: selectedOrigin.country,
+                stateRegion: selectedOrigin.stateRegion || undefined,
+                townCity: selectedOrigin.name,
+                placeType: 'town',
+              }
+            : undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to add family member');
+      }
+
+      await res.json();
+
+      await loadFamilyData();
+      await refreshOverview();
+      setShowAddModal(false);
+      setFirstName('');
+      setLastName('');
+      setOtherNames('');
+      setGender('unspecified');
+      setRelationshipType('parent');
+      setOriginCountryCode('');
+      setOriginRegionId('');
+      setOriginPlaceId('');
+      setOriginRegions([]);
+      setOriginPlaces([]);
+      setNotes('');
+      setSuccessMsg('Family member connected successfully.');
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      console.error('Error adding family member:', err);
+      setErrorMsg(err.message || 'Failed to connect family member.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const executeRemove = async (relationshipIdOrPersonId: number, memberName: string) => {
+    if (!idToken) return;
+
+    try {
+      const res = await fetch(`/api/family/${relationshipIdOrPersonId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${idToken}` },
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to remove relationship');
+      }
+      await loadFamilyData();
+      await refreshOverview();
+      setSelectedNode(null);
+      setSuccessMsg(`Disconnected ${memberName} from your family tree.`);
+      setTimeout(() => setSuccessMsg(null), 3500);
+    } catch (err: any) {
+      console.error('Error removing connection:', err);
+      setErrorMsg(err.message || 'Failed to remove connection.');
+      setTimeout(() => setErrorMsg(null), 4000);
+      throw err;
+    }
+  };
+
+  const handleRemove = async (relationshipIdOrPersonId: number, memberName: string) => {
+    await executeRemove(relationshipIdOrPersonId, memberName);
+  };
+
+  const openInvitations = () => {
+    setShowInvitationsModal(true);
+  };
+
+  // Group members for list view
+  const parents = members.filter((m) => m.relationshipType === 'parent');
+  const spouses = members.filter((m) => m.relationshipType === 'spouse');
+  const children = members.filter((m) => m.relationshipType === 'child');
+  const siblings = members.filter((m) => m.relationshipType === 'sibling');
+  const grandparents = members.filter((m) => m.relationshipType === 'grandparent');
+  const others = members.filter(
+    (m) => !['parent', 'spouse', 'child', 'sibling', 'grandparent'].includes(m.relationshipType)
+  );
+  const overviewRelationshipTypes = familyOverviewRelationships[familyOverviewView];
+  const visibleOverviewMembers = overviewRelationshipTypes
+    ? members.filter((member) => overviewRelationshipTypes.includes(member.relationshipType))
+    : members;
+  const familyOverviewHierarchy: FamilyOverviewHierarchyTier[] = (() => {
+    const selfTier = (label: string, tierMembers: FamilyMemberWithPerson[] = []): FamilyOverviewHierarchyTier => ({
+      label,
+      members: tierMembers,
+      includeSelf: true,
+    });
+    const tier = (label: string, tierMembers: FamilyMemberWithPerson[]): FamilyOverviewHierarchyTier => ({
+      label,
+      members: tierMembers,
+    });
+
+    switch (familyOverviewView) {
+      case 'spouse':
+        return [selfTier('You and your spouse / partner', spouses)];
+      case 'spouse_children':
+        return [
+          selfTier('You and your spouse / partner', spouses),
+          { ...tier('Children connected to you', children), note: 'The recorded relationships do not specify which partner is a parent.' },
+        ];
+      case 'children':
+        return [selfTier('You', []), tier('Your children', children)];
+      case 'parents_siblings':
+        return [
+          tier('Generation +1 · Parents', parents),
+          selfTier('Your generation · You and siblings', siblings),
+        ];
+      case 'siblings':
+        return [selfTier('You and your siblings', siblings)];
+      case 'ancestors':
+        return [
+          tier('Generation +2 · Grandparents', grandparents),
+          tier('Generation +1 · Parents', parents),
+          selfTier('You', []),
+        ];
+      case 'descendants':
+        return [
+          selfTier('You', []),
+          tier('Generation -1 · Children', children),
+          tier('Generation -2 · Grandchildren', members.filter((member) => member.relationshipType === 'grandchild')),
+        ];
+      case 'extended':
+        return [
+          selfTier('You', []),
+          {
+            ...tier('Extended family · generation unspecified', members.filter((member) => ['relative', 'other'].includes(member.relationshipType))),
+            connectsToPrevious: false,
+            note: 'These connections are recorded relative to you, but their exact generation is not specified.',
+          },
+        ];
+      case 'all':
+        return [];
+    }
+  })();
+
+  const connectionsCount = members.length;
+  const generationsCount =
+    treeData?.summary?.generationsCount ||
+    (members.length === 0
+      ? 1
+      : members.some((m) => m.relationshipType === 'grandparent') &&
+        members.some((m) => m.relationshipType === 'child')
+      ? 3
+      : members.some(
+          (m) =>
+            m.relationshipType === 'grandparent' ||
+            m.relationshipType === 'child' ||
+            m.relationshipType === 'parent'
+        )
+      ? 2
+      : 1);
+
+  const renderOverviewMember = (member: FamilyMemberWithPerson) => (
+    <div key={member.relationshipId} className="w-full">
+      <MemberCard
+        member={member}
+        onSelect={() => {
+          const matched = treeData?.nodes.find((node) => node.personId === member.personId);
+          if (matched) setSelectedNode(matched);
+        }}
+        onRemove={(id, name) => setDisconnectTarget({ id, name })}
+      />
+    </div>
+  );
+
+  const renderSelfAnchor = () => (
+    <button
+      type="button"
+      disabled={!treeData}
+      onClick={() => treeData && setSelectedNode(treeData.self)}
+      className="flex min-h-[5.5rem] w-full items-center gap-3 rounded-xl border border-sky-300 bg-gradient-to-r from-[#05224C] to-[#083068] p-4 text-left text-white shadow-xs transition hover:brightness-110 disabled:cursor-default"
+    >
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-white text-sm font-bold text-[#05224C]">You</span>
+      <span className="min-w-0">
+        <span className="block text-sm font-bold">{treeData ? `${treeData.self.firstName} ${treeData.self.lastName}` : 'You'}</span>
+        <span className="mt-0.5 block text-xs text-sky-200">Family anchor</span>
+      </span>
+    </button>
+  );
+
+  const renderHierarchyTier = (tier: FamilyOverviewHierarchyTier, index: number) => {
+    const itemCount = tier.members.length + (tier.includeSelf ? 1 : 0);
+    const cardsLayout = itemCount === 1
+      ? 'mx-auto grid w-full max-w-sm grid-cols-1 gap-3'
+      : itemCount === 2
+        ? 'mx-auto grid w-full max-w-3xl grid-cols-1 gap-3 sm:grid-cols-2'
+        : 'grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3';
+
+    return (
+      <React.Fragment key={`${tier.label}-${index}`}>
+        {index > 0 && tier.connectsToPrevious !== false && (
+          <div aria-hidden="true" className="mx-auto h-7 w-px bg-slate-300" />
+        )}
+        <section aria-label={tier.label} className="space-y-2">
+          <h3 className="text-center text-[11px] font-bold uppercase tracking-wider text-slate-600">{tier.label}</h3>
+          {tier.note && <p className="mx-auto max-w-2xl text-center text-xs leading-relaxed text-slate-500">{tier.note}</p>}
+          {itemCount > 0 ? (
+            <div className={cardsLayout}>
+              {tier.includeSelf && <div className="w-full">{renderSelfAnchor()}</div>}
+              {tier.members.map(renderOverviewMember)}
+            </div>
+          ) : (
+            <p className="rounded-lg border border-dashed border-slate-200 px-3 py-2 text-center text-xs text-slate-500">
+              No connections are recorded at this generation.
+            </p>
+          )}
+        </section>
+      </React.Fragment>
+    );
+  };
+
+  return (
+    <div className="max-w-6xl mx-auto px-4 py-8 sm:py-10 space-y-6">
+      {/* Notifications */}
+      {successMsg && (
+        <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center space-x-2">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+          <span>{successMsg}</span>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs flex items-center space-x-2">
+          <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
+          <span>{errorMsg}</span>
+        </div>
+      )}
+
+      {/* SUBVIEW 1: Family Tree Visualizer (Sub-view under My Family) */}
+      {subView === 'invitations' ? (
+        null
+      ) : subView === 'tree' ? (
+        <div className="space-y-6">
+          {/* Page hero */}
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="space-y-1">
+              <h1 className="text-2xl font-bold tracking-tight text-[#05224C] sm:text-3xl">Family Tree</h1>
+              <p className="text-sm text-slate-500">
+                Explore your relatives and connections across generations.
+              </p>
+              <p className="pt-1 text-xs font-medium text-slate-500">
+                {connectionsCount} {connectionsCount === 1 ? 'connection' : 'connections'} · {generationsCount} {generationsCount === 1 ? 'generation' : 'generations'}
+              </p>
+            </div>
+
+            {/* One view selector, followed by the page actions. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div role="group" aria-label="Family display" className="flex items-center rounded-xl border border-slate-200 bg-slate-100 p-1">
+                <button
+                  type="button"
+                  aria-pressed={familyDisplayMode === 'tree'}
+                  onClick={() => setFamilyDisplayMode('tree')}
+                  className={`flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition sm:px-3 ${
+                    familyDisplayMode === 'tree'
+                      ? 'bg-white text-[#05224C] shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Interactive family tree diagram"
+                >
+                  <GitFork className="w-3.5 h-3.5" />
+                  <span>Tree</span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={familyDisplayMode === 'lineage'}
+                  onClick={() => setFamilyDisplayMode('lineage')}
+                  className={`flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition sm:px-3 ${
+                    familyDisplayMode === 'lineage'
+                      ? 'bg-white text-[#05224C] shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                  title="Vertical family lineage"
+                >
+                  <GitBranch className="w-3.5 h-3.5" />
+                  <span>Lineage</span>
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={familyDisplayMode === 'list'}
+                  onClick={() => setFamilyDisplayMode('list')}
+                  className={`flex min-h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition sm:px-3 ${
+                    familyDisplayMode === 'list'
+                      ? 'bg-white text-[#05224C] shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  <span>List</span>
+                </button>
+              </div>
+
+              <button
+                onClick={openInvitations}
+                className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition shadow-xs"
+              >
+                <Mail className="w-3.5 h-3.5 text-sky-600" />
+                <span>Invitations</span>
+                <InvitationBadge pendingCount={pendingCount} showActivity={alertsEnabled && hasUnreadActivity} />
+              </button>
+
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-[#05224C] hover:bg-[#07306b] text-white text-xs font-semibold transition shadow-xs"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Relative</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Tree Primary Canvas */}
+          {loading ? (
+            <div className="bg-white rounded-2xl border border-slate-200 p-16 text-center space-y-3 shadow-xs">
+              <div className="w-8 h-8 rounded-full border-2 border-[#05224C] border-t-transparent animate-spin mx-auto"></div>
+              <p className="text-xs font-medium text-slate-500">Generating multi-generational family tree...</p>
+            </div>
+          ) : treeData && familyDisplayMode !== 'list' ? (
+            <FamilyTreeCanvas
+              tree={treeData}
+              layoutStyle={familyDisplayMode === 'lineage' ? 'hierarchy' : 'canvas'}
+              density={cardDensity}
+              onDensityChange={setCardDensity}
+              onSelectNode={(node) => setSelectedNode(node)}
+            />
+          ) : (
+            /* List View or Fallback when in Tree Subview */
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 sm:p-8 space-y-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h2 className="text-base font-bold text-slate-900">Family Members by Generation</h2>
+                  <p className="text-xs text-slate-500">
+                    Detailed listing of all recorded parents, partner, children, siblings, and relatives.
+                  </p>
+                </div>
+                {treeData && (
+                  <span className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700">
+                    {treeData.summary.totalMembers} Members Total
+                  </span>
+                )}
+              </div>
+
+              {members.length === 0 ? (
+                <div className="py-12 text-center space-y-3">
+                  <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+                    <Users className="w-6 h-6" />
+                  </div>
+                  <p className="text-sm font-medium text-slate-700">No family connections recorded yet</p>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                    Add parents, your spouse or partner, children, or siblings to generate your visual tree.
+                  </p>
+                  <button
+                    onClick={() => setShowAddModal(true)}
+                    className="inline-flex items-center space-x-2 px-4 py-2 rounded-xl bg-[#05224C] text-white text-xs font-semibold transition"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Connect First Person</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {/* Grandparents */}
+                  {grandparents.length > 0 && (
+                    <div className="space-y-2">
+                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        Grandparents
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {grandparents.map((m) => (
+                          <MemberCard
+                            key={m.relationshipId}
+                            member={m}
+                            onSelect={() => {
+                              const matched = treeData?.nodes.find((n) => n.personId === m.personId);
+                              if (matched) setSelectedNode(matched);
+                            }}
+                            onRemove={(id, name) => setDisconnectTarget({ id, name })}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Parents */}
+                  {parents.length > 0 && (
+                    <div className="space-y-2">
+                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        Parents
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {parents.map((m) => (
+                          <MemberCard
+                            key={m.relationshipId}
+                            member={m}
+                            onSelect={() => {
+                              const matched = treeData?.nodes.find((n) => n.personId === m.personId);
+                              if (matched) setSelectedNode(matched);
+                            }}
+                            onRemove={(id, name) => setDisconnectTarget({ id, name })}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* You & Spouses & Siblings */}
+                  <div className="space-y-2">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                      You, Partner & Siblings
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {treeData && (
+                        <div
+                          onClick={() => setSelectedNode(treeData.self)}
+                          className="p-4 rounded-xl bg-gradient-to-r from-[#05224C] to-[#083068] text-white flex items-center justify-between cursor-pointer shadow-xs border border-sky-400/40"
+                        >
+                          <div className="flex items-center space-x-3">
+                            <div className="w-10 h-10 rounded-full bg-white text-[#05224C] flex items-center justify-center font-bold text-sm">
+                              You
+                            </div>
+                            <div>
+                              <h4 className="text-sm font-bold text-white">
+                                {treeData.self.firstName} {treeData.self.lastName}
+                              </h4>
+                              <p className="text-xs text-sky-200">Self (Center Root)</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {spouses.map((m) => (
+                        <MemberCard
+                          key={m.relationshipId}
+                          member={m}
+                          onSelect={() => {
+                            const matched = treeData?.nodes.find((n) => n.personId === m.personId);
+                            if (matched) setSelectedNode(matched);
+                          }}
+                          onRemove={(id, name) => setDisconnectTarget({ id, name })}
+                        />
+                      ))}
+
+                      {siblings.map((m) => (
+                        <MemberCard
+                          key={m.relationshipId}
+                          member={m}
+                          onSelect={() => {
+                            const matched = treeData?.nodes.find((n) => n.personId === m.personId);
+                            if (matched) setSelectedNode(matched);
+                          }}
+                          onRemove={(id, name) => setDisconnectTarget({ id, name })}
+                        />
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Children */}
+                  {children.length > 0 && (
+                    <div className="space-y-2">
+                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        Children
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {children.map((m) => (
+                          <MemberCard
+                            key={m.relationshipId}
+                            member={m}
+                            onSelect={() => {
+                              const matched = treeData?.nodes.find((n) => n.personId === m.personId);
+                              if (matched) setSelectedNode(matched);
+                            }}
+                            onRemove={(id, name) => setDisconnectTarget({ id, name })}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Extended Relatives */}
+                  {others.length > 0 && (
+                    <div className="space-y-2">
+                      <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                        Extended Relatives
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                        {others.map((m) => (
+                          <MemberCard
+                            key={m.relationshipId}
+                            member={m}
+                            onSelect={() => {
+                              const matched = treeData?.nodes.find((n) => n.personId === m.personId);
+                              if (matched) setSelectedNode(matched);
+                            }}
+                            onRemove={(id, name) => setDisconnectTarget({ id, name })}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      ) : (
+        /* SUBVIEW 2: Family Overview */
+        <div className="space-y-6">
+          {/* Page hero */}
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="space-y-1">
+              <h1 className="text-2xl sm:text-3xl font-bold text-[#05224C] tracking-tight">
+                My Family
+              </h1>
+              <p className="text-sm text-slate-500">
+                Your multi-generational relationships, family roots, and member connections.
+              </p>
+              <p className="pt-1 text-xs font-medium text-slate-500">
+                {connectionsCount} {connectionsCount === 1 ? 'family connection' : 'family connections'} · {generationsCount} {generationsCount === 1 ? 'generation' : 'generations'}
+              </p>
+            </div>
+
+            {/* Hero actions */}
+            <div className="flex flex-wrap items-center gap-2.5">
+              <button
+                onClick={() => setSubView('tree')}
+                className="inline-flex items-center space-x-1.5 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-xs transition hover:bg-slate-50"
+              >
+                <GitFork className="h-3.5 w-3.5 text-sky-700" />
+                <span>View Family Tree</span>
+              </button>
+              {/* Invitations Hub */}
+              <button
+                onClick={openInvitations}
+                className="inline-flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition shadow-xs"
+              >
+                <Mail className="w-3.5 h-3.5 text-sky-600" />
+                <span>Invitations</span>
+                <InvitationBadge pendingCount={pendingCount} showActivity={alertsEnabled && hasUnreadActivity} />
+              </button>
+
+              {/* Add Member Button */}
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-[#05224C] hover:bg-[#07306b] text-white text-xs font-semibold transition shadow-xs"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Relative</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Kinship Discovery Banner */}
+          <KinshipDiscoveryBanner idToken={idToken} onClaimed={async () => {
+            await loadFamilyData();
+            await refreshInvitationNotifications();
+          }} />
+
+          {/* Family Connections / Relatives by Generation */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 sm:p-8 space-y-6">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">Family Connections</h2>
+                <p className="text-xs text-slate-500">
+                  Recorded parents, spouse/partner, children, siblings, and extended relatives.
+                </p>
+              </div>
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-end">
+                <label className="w-full max-w-[22rem] sm:min-w-64">
+                  <span className="mb-1 block text-xs font-semibold text-slate-600">Family view</span>
+                  <select
+                    aria-label="Family view"
+                    value={familyOverviewView}
+                    onChange={(event) => setFamilyOverviewView(event.target.value as FamilyOverviewView)}
+                    className="min-h-10 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-xs focus:outline-none focus:ring-2 focus:ring-[#05224C]"
+                  >
+                    {familyOverviewViews.map((view) => (
+                      <option key={view.id} value={view.id}>{view.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <span aria-live="polite" className="self-start rounded-lg bg-slate-100 px-2.5 py-1.5 text-xs font-semibold text-slate-700 sm:self-auto">
+                  {familyOverviewView === 'all'
+                    ? `${connectionsCount} ${connectionsCount === 1 ? 'Connection' : 'Connections'}`
+                    : `${visibleOverviewMembers.length} of ${connectionsCount} connections`}
+                </span>
+              </div>
+            </div>
+
+            {loading ? (
+              <div className="py-12 text-center space-y-3">
+                <div className="w-8 h-8 rounded-full border-2 border-[#05224C] border-t-transparent animate-spin mx-auto"></div>
+                <p className="text-xs font-medium text-slate-500">Loading family connections...</p>
+              </div>
+            ) : members.length === 0 ? (
+              <div className="py-12 text-center space-y-3">
+                <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+                  <Users className="w-6 h-6" />
+                </div>
+                <p className="text-sm font-medium text-slate-700">No family connections recorded yet</p>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                  Add parents, your spouse or partner, children, or siblings to map your family roots.
+                </p>
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="inline-flex items-center space-x-2 px-4 py-2 rounded-xl bg-[#05224C] text-white text-xs font-semibold transition"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Connect First Person</span>
+                </button>
+              </div>
+            ) : visibleOverviewMembers.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-10 text-center">
+                <p className="text-sm font-medium text-slate-700">No connections in this view yet</p>
+                <p className="mt-1 text-xs text-slate-500">Choose another family view to see your other recorded connections.</p>
+              </div>
+            ) : familyOverviewView !== 'all' ? (
+              <div className="mx-auto w-full max-w-5xl space-y-2 rounded-2xl border border-slate-200 bg-slate-50/70 p-3 sm:p-5">
+                {familyOverviewHierarchy.map(renderHierarchyTier)}
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Grandparents */}
+                {grandparents.length > 0 && (
+                  <div className="space-y-2">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                      Grandparents
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {grandparents.map((m) => (
+                        <MemberCard
+                          key={m.relationshipId}
+                          member={m}
+                          onSelect={() => {
+                            const matched = treeData?.nodes.find((n) => n.personId === m.personId);
+                            if (matched) setSelectedNode(matched);
+                          }}
+                          onRemove={(id, name) => setDisconnectTarget({ id, name })}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Parents */}
+                {parents.length > 0 && (
+                  <div className="space-y-2">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                      Parents
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {parents.map((m) => (
+                        <MemberCard
+                          key={m.relationshipId}
+                          member={m}
+                          onSelect={() => {
+                            const matched = treeData?.nodes.find((n) => n.personId === m.personId);
+                            if (matched) setSelectedNode(matched);
+                          }}
+                          onRemove={(id, name) => setDisconnectTarget({ id, name })}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* You & Spouses & Siblings */}
+                <div className="space-y-2">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                    You, Partner & Siblings
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {/* You Card */}
+                    {treeData && (
+                      <div
+                        onClick={() => setSelectedNode(treeData.self)}
+                        className="p-4 rounded-xl bg-gradient-to-r from-[#05224C] to-[#083068] text-white flex items-center justify-between cursor-pointer shadow-xs border border-sky-400/40"
+                      >
+                        <div className="flex items-center space-x-3">
+                          <div className="w-10 h-10 rounded-full bg-white text-[#05224C] flex items-center justify-center font-bold text-sm">
+                            You
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-white">
+                              {treeData.self.firstName} {treeData.self.lastName}
+                            </h4>
+                            <p className="text-xs text-sky-200">Self (Center Root)</p>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {spouses.map((m) => (
+                      <MemberCard
+                        key={m.relationshipId}
+                        member={m}
+                        onSelect={() => {
+                          const matched = treeData?.nodes.find((n) => n.personId === m.personId);
+                          if (matched) setSelectedNode(matched);
+                        }}
+                        onRemove={(id, name) => setDisconnectTarget({ id, name })}
+                      />
+                    ))}
+
+                    {siblings.map((m) => (
+                      <MemberCard
+                        key={m.relationshipId}
+                        member={m}
+                        onSelect={() => {
+                          const matched = treeData?.nodes.find((n) => n.personId === m.personId);
+                          if (matched) setSelectedNode(matched);
+                        }}
+                        onRemove={(id, name) => setDisconnectTarget({ id, name })}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Children */}
+                {children.length > 0 && (
+                  <div className="space-y-2">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                      Children
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {children.map((m) => (
+                        <MemberCard
+                          key={m.relationshipId}
+                          member={m}
+                          onSelect={() => {
+                            const matched = treeData?.nodes.find((n) => n.personId === m.personId);
+                            if (matched) setSelectedNode(matched);
+                          }}
+                          onRemove={(id, name) => setDisconnectTarget({ id, name })}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Extended Relatives */}
+                {others.length > 0 && (
+                  <div className="space-y-2">
+                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                      Extended Relatives
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {others.map((m) => (
+                        <MemberCard
+                          key={m.relationshipId}
+                          member={m}
+                          onSelect={() => {
+                            const matched = treeData?.nodes.find((n) => n.personId === m.personId);
+                            if (matched) setSelectedNode(matched);
+                          }}
+                          onRemove={(id, name) => setDisconnectTarget({ id, name })}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Family Member Detail Drawer / Modal */}
+      {selectedNode && (
+        <FamilyMemberDetailModal
+          node={selectedNode}
+          onClose={() => setSelectedNode(null)}
+          idToken={idToken}
+          onUpdated={async () => {
+            await loadFamilyData();
+            await refreshOverview();
+            await refreshInvitationNotifications();
+          }}
+          onRemove={handleRemove}
+        />
+      )}
+
+      {/* Invitations Hub Modal */}
+      <FamilyInvitationsModal
+        isOpen={showInvitationsModal || subView === 'invitations'}
+        embedded={subView === 'invitations'}
+        onOpened={markInvitationActivityRead}
+        onClose={() => {
+          setShowInvitationsModal(false);
+          if (subView === 'invitations') setSubView('overview');
+        }}
+        idToken={idToken}
+        onSuccess={async () => {
+          await loadFamilyData();
+          await refreshOverview();
+          await refreshInvitationNotifications();
+        }}
+      />
+
+      {/* Add Family Member Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
+            <div className="bg-[#05224C] px-6 py-4 text-white flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-base">Add Family Connection</h3>
+                <p className="text-xs text-sky-200">Connect a relative to your GeoSmart tree</p>
+              </div>
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="text-slate-300 hover:text-white text-lg font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleAddMember} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    First Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    placeholder="First name"
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Last Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={lastName}
+                    onChange={(e) => setLastName(e.target.value)}
+                    placeholder="Last name"
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase text-slate-700">
+                  Gender (Optional)
+                </label>
+                <select
+                  value={gender}
+                  onChange={(e) => setGender(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#05224C]"
+                >
+                  {familyGenderOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-slate-500">This only changes relationship wording; it is never inferred from a name.</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Relationship to You *
+                </label>
+                <select
+                  value={relationshipType}
+                  onChange={(e) => setRelationshipType(e.target.value as RelationshipType)}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none bg-white"
+                >
+                  {getRelationshipOptions(gender).map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Other / Middle Names (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={otherNames}
+                  onChange={(e) => setOtherNames(e.target.value)}
+                  placeholder="e.g. Chukwuma"
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Place of Origin / Roots (Optional)
+                </label>
+                <div className="space-y-2">
+                  <select
+                    aria-label="Origin country"
+                    value={originCountryCode}
+                    disabled={originCountriesLoading || originCountries.length === 0}
+                    onChange={(e) => {
+                      setOriginCountryCode(e.target.value);
+                      setOriginRegionId('');
+                      setOriginPlaceId('');
+                      setOriginRegions([]);
+                      setOriginPlaces([]);
+                      setOriginLocationError(null);
+                    }}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#05224C] disabled:bg-slate-100"
+                  >
+                    <option value="">{originCountriesLoading ? 'Loading countries…' : 'Select a country'}</option>
+                    {originCountries.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}
+                  </select>
+
+                  <select
+                    aria-label="Origin state or region"
+                    value={originRegionId}
+                    disabled={!originCountryCode || originRegionsLoading || originRegions.length === 0}
+                    onChange={(e) => {
+                      setOriginRegionId(e.target.value);
+                      setOriginPlaceId('');
+                      setOriginPlaces([]);
+                      setOriginLocationError(null);
+                    }}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#05224C] disabled:bg-slate-100"
+                  >
+                    <option value="">
+                      {originRegionsLoading
+                        ? 'Loading regions…'
+                        : !originCountryCode
+                          ? 'Select a country first'
+                          : originRegions.length === 0
+                            ? 'No region selection needed'
+                            : 'Select a state or region'}
+                    </option>
+                    {originRegions.map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}
+                  </select>
+
+                  <select
+                    aria-label="Origin town, city, or village"
+                    value={originPlaceId}
+                    disabled={!originCountryCode || originPlacesLoading || (originRegions.length > 0 && !originRegionId)}
+                    onChange={(e) => setOriginPlaceId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#05224C] disabled:bg-slate-100"
+                  >
+                    <option value="">
+                      {originPlacesLoading
+                        ? 'Loading towns and cities…'
+                        : !originCountryCode
+                          ? 'Select a country first'
+                          : originRegions.length > 0 && !originRegionId
+                            ? 'Select a state or region first'
+                            : 'Select a town, city, or village'}
+                    </option>
+                    {originPlaces.map((place) => <option key={place.id} value={place.id}>{place.name}</option>)}
+                  </select>
+                </div>
+                <p className="mt-1 text-xs text-slate-500" aria-live="polite">
+                  {originLocationError || (originPlaceId ? 'Selected place will be saved as this relative’s roots.' : 'Choose a country, then a region and populated place from the lists.')}
+                </p>
+                <p className="mt-1 text-[10px] text-slate-400">
+                  Contains data from <a href="https://github.com/dr5hn/countries-states-cities-database" target="_blank" rel="noreferrer" className="underline hover:text-slate-600">Countries States Cities Database</a> under the <a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noreferrer" className="underline hover:text-slate-600">ODbL</a>.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Notes (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="e.g. Maternal grandfather or eldest sister"
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Privacy Setting
+                </label>
+                <select
+                  value={visibility}
+                  onChange={(e) => setVisibility(e.target.value as VisibilitySetting)}
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none bg-white"
+                >
+                  <option value="private">Private (Only visible to you)</option>
+                  <option value="shared">Shared (Visible to verified family)</option>
+                  <option value="public">Public</option>
+                </select>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end space-x-3">
+                <button
+                  type="button"
+                  onClick={() => setShowAddModal(false)}
+                  className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900 font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="px-5 py-2 rounded-xl bg-[#05224C] hover:bg-[#07306b] text-white text-sm font-semibold transition disabled:opacity-60"
+                >
+                  {submitting ? 'Saving...' : 'Add Connection'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* In-App Confirmation Modal for Disconnecting */}
+      {disconnectTarget && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="max-w-sm w-full bg-white rounded-2xl p-6 shadow-xl border border-slate-200 space-y-4">
+            <div className="w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div className="text-center space-y-1.5">
+              <h3 className="font-bold text-slate-900 text-base">Disconnect Family Member?</h3>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Are you sure you want to disconnect <span className="font-semibold text-slate-800">{disconnectTarget.name}</span> from your family tree? This will remove their node and relationship link.
+              </p>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button
+                type="button"
+                disabled={disconnecting}
+                onClick={() => setDisconnectTarget(null)}
+                className="flex-1 px-4 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={disconnecting}
+                onClick={async () => {
+                  setDisconnecting(true);
+                  try {
+                    await executeRemove(disconnectTarget.id, disconnectTarget.name);
+                    setDisconnectTarget(null);
+                  } catch {
+                    // Handled in executeRemove
+                  } finally {
+                    setDisconnecting(false);
+                  }
+                }}
+                className="flex-1 px-4 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-700 rounded-xl transition disabled:opacity-50"
+              >
+                {disconnecting ? 'Disconnecting...' : 'Disconnect'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const InvitationBadge: React.FC<{ pendingCount: number; showActivity: boolean }> = ({ pendingCount, showActivity }) => (
+  <span className="inline-flex items-center gap-1.5">
+    {showActivity && <span aria-hidden="true" className="h-2 w-2 rounded-full bg-amber-500" />}
+    {pendingCount > 0 && (
+      <span aria-label={`${pendingCount} pending invitations`} className="min-w-5 rounded-full bg-sky-100 px-1.5 py-0.5 text-center text-[10px] font-bold leading-4 text-sky-900">
+        {pendingCount > 99 ? '99+' : pendingCount}
+      </span>
+    )}
+    {(showActivity || pendingCount > 0) && (
+      <span className="sr-only">
+        {showActivity ? 'New invitation activity. ' : ''}
+        {pendingCount > 0 ? `${pendingCount} pending invitations.` : ''}
+      </span>
+    )}
+  </span>
+);
+
+const MemberCard: React.FC<{
+  member: FamilyMemberWithPerson;
+  onSelect: () => void;
+  onRemove: (id: number, name: string) => void;
+}> = ({ member, onSelect, onRemove }) => {
+  const firstName = member.firstName || (member as any).relative?.firstName || 'Family';
+  const lastName = member.lastName || (member as any).relative?.lastName || 'Member';
+  const fullName = `${firstName} ${lastName}`.trim();
+  const visibility = (member as any).visibility || 'private';
+
+  return (
+    <div
+      onClick={onSelect}
+      className="p-4 rounded-xl bg-white border border-slate-200/90 shadow-2xs flex items-center justify-between hover:border-slate-300 cursor-pointer transition group"
+    >
+      <div className="flex items-center space-x-3 min-w-0">
+        <div className="w-10 h-10 rounded-full bg-slate-100 text-[#05224C] flex items-center justify-center font-bold text-sm flex-shrink-0">
+          {firstName.charAt(0)}
+          {lastName.charAt(0)}
+        </div>
+        <div className="min-w-0">
+          <h4 className="text-sm font-bold text-slate-900 truncate group-hover:text-[#05224C]">
+            {fullName}
+          </h4>
+          <div className="flex items-center space-x-2 text-xs text-slate-500 capitalize truncate">
+            <span className="font-semibold text-slate-700">{getRelationshipLabel(member.relationshipType, member.gender)}</span>
+            <span>·</span>
+            {member.hasAccount ? (
+              <span className="text-emerald-700 font-medium">Member</span>
+            ) : (
+              <span className="text-amber-700">Unlinked</span>
+            )}
+            {member.placeOfOrigin && (
+              <>
+                <span>·</span>
+                <span className="truncate">{member.placeOfOrigin.name}</span>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center space-x-1 pl-2">
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove(member.relationshipId, fullName);
+          }}
+          title="Disconnect connection"
+          className="p-1.5 text-slate-400 hover:text-red-600 rounded hover:bg-red-50 transition"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+};
