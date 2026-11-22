@@ -14,6 +14,7 @@ import { EditProfileModal } from './components/EditProfileModal.tsx';
 import { SettingsModal } from './components/SettingsModal.tsx';
 import { WorkspaceNavigation } from './components/WorkspaceNavigation.tsx';
 import { InvitationNotificationsProvider } from './components/InvitationNotificationsContext.tsx';
+import { ConnectivityBanner } from './components/ConnectivityBanner.tsx';
 import {
   FamilySubView,
   getWorkspacePath,
@@ -25,7 +26,7 @@ import { ShieldCheck, Database } from 'lucide-react';
 
 const readLocation = () => {
   let pathname = window.location.pathname.replace(/\/+$/, '') || '/';
-  const knownRoutes = new Set(['/', '/profile', '/family', '/family/tree', '/family/invitations', '/community', '/place', '/admin']);
+  const knownRoutes = new Set(['/', '/profile', '/family', '/family/tree', '/family/invitations', '/family/stories', '/community', '/place', '/admin']);
   if (!knownRoutes.has(pathname)) {
     window.history.replaceState(null, '', '/');
     pathname = '/';
@@ -254,7 +255,10 @@ export function App() {
   return (
     <AuthProvider>
       <InvitationNotificationsProvider>
-        <MainAppContent />
+        <>
+          <ConnectivityBanner />
+          <MainAppContent />
+        </>
       </InvitationNotificationsProvider>
     </AuthProvider>
   );

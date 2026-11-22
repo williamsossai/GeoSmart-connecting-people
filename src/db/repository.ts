@@ -15,10 +15,12 @@ import {
   adminAccessLogs,
   familyInvitations,
   familyInvitationNotificationStates,
+  familyStories,
 } from './schema.ts';
-import { eq, and, or, ilike, desc, sql, isNull, gt, ne } from 'drizzle-orm';
+import { eq, and, or, ilike, desc, sql, isNull, gt, ne, inArray } from 'drizzle-orm';
 import type { RelationshipType, PlaceConnectionType, CommunityType, CommunityConnectionType, VisibilitySetting } from '../types.ts';
 import { hashPassword, verifyPassword, signAppToken, isConfiguredAdminUid } from '../lib/server-auth.ts';
+import { deleteFamilyStoryObject } from '../lib/family-story-storage.ts';
 
 // Helper to compute inverse relationship
 export function getInverseRelationship(type: RelationshipType, gender?: string | null): RelationshipType {
@@ -2189,6 +2191,105 @@ export async function claimDiscoveredPerson(userId: number, invitationId: number
   }
 }
 
+export async function getFamilyStories(userId: number) {
+  const family = await getUserFamily(userId);
+  const connectedUserIds = [...new Set(family
+    .map((member) => member.userId)
+    .filter((linkedUserId): linkedUserId is number => Boolean(linkedUserId) && linkedUserId !== userId))];
+  const visibilityFilter = connectedUserIds.length
+    ? or(
+        eq(familyStories.ownerUserId, userId),
+        and(eq(familyStories.visibility, 'family'), inArray(familyStories.ownerUserId, connectedUserIds)),
+      )
+    : eq(familyStories.ownerUserId, userId);
+  const stories = await db.select({
+    id: familyStories.id,
+    ownerUserId: familyStories.ownerUserId,
+    ownerName: users.displayName,
+    title: familyStories.title,
+    description: familyStories.description,
+    mediaType: familyStories.mediaType,
+    contentType: familyStories.contentType,
+    fileSize: familyStories.fileSize,
+    visibility: familyStories.visibility,
+    createdAt: familyStories.createdAt,
+  })
+    .from(familyStories)
+    .innerJoin(users, eq(familyStories.ownerUserId, users.id))
+    .where(visibilityFilter)
+    .orderBy(desc(familyStories.createdAt));
+
+  return stories.map((story) => ({
+    ...story,
+    ownerName: story.ownerName || 'Family member',
+    mediaType: story.mediaType as 'audio' | 'video',
+    visibility: story.visibility as 'private' | 'family',
+    createdAt: story.createdAt.toISOString(),
+    isOwner: story.ownerUserId === userId,
+  }));
+}
+
+export async function createFamilyStory(userId: number, input: {
+  title: string;
+  description?: string | null;
+  storagePath: string;
+  contentType: string;
+  mediaType: 'audio' | 'video';
+  fileSize: number;
+  visibility: 'private' | 'family';
+  consentVersion: string;
+}) {
+  if (!input.storagePath.startsWith(`${userId}/`)) throw new Error('Invalid story storage path.');
+  const person = await ensureUserPerson(userId, '');
+  const [story] = await db.insert(familyStories).values({
+    ownerUserId: userId,
+    personId: person.id,
+    title: input.title,
+    description: input.description || null,
+    storagePath: input.storagePath,
+    contentType: input.contentType,
+    mediaType: input.mediaType,
+    fileSize: input.fileSize,
+    visibility: input.visibility,
+    consentVersion: input.consentVersion,
+    consentConfirmedAt: new Date(),
+  }).returning({ id: familyStories.id });
+
+  await recordActivityEvent(
+    'FAMILY_STORY_CREATED',
+    `Added a ${input.mediaType} family story`,
+    userId,
+    'family_story',
+    story.id,
+    { visibility: input.visibility, consentVersion: input.consentVersion },
+  );
+  return { id: story.id };
+}
+
+export async function getFamilyStoryStoragePath(userId: number, storyId: number) {
+  const [story] = await db.select().from(familyStories).where(eq(familyStories.id, storyId));
+  if (!story) throw new Error('Story not found.');
+  if (story.ownerUserId === userId) return story.storagePath;
+  if (story.visibility !== 'family') throw new Error('You do not have access to this story.');
+
+  const family = await getUserFamily(userId);
+  const connectedUserIds = new Set(family.map((member) => member.userId).filter(Boolean));
+  if (!connectedUserIds.has(story.ownerUserId)) throw new Error('You do not have access to this story.');
+  return story.storagePath;
+}
+
+export async function deleteFamilyStory(userId: number, storyId: number) {
+  const [story] = await db.select().from(familyStories).where(and(
+    eq(familyStories.id, storyId),
+    eq(familyStories.ownerUserId, userId),
+  ));
+  if (!story) throw new Error('Story not found or permission denied.');
+  await deleteFamilyStoryObject(story.storagePath);
+  await db.delete(familyStories).where(eq(familyStories.id, story.id));
+  await recordActivityEvent('FAMILY_STORY_DELETED', 'Deleted a family story', userId, 'family_story', story.id);
+  return { success: true };
+}
+
 // 9. Activity Event System
 export async function recordActivityEvent(
   eventType: string,
@@ -2221,6 +2322,18 @@ export async function exportUserData(userId: number) {
     const family = await getUserFamily(userId);
     const placesList = await getUserPlaces(userId);
     const communitiesList = await getUserCommunities(userId);
+    const stories = await db.select({
+      id: familyStories.id,
+      title: familyStories.title,
+      description: familyStories.description,
+      mediaType: familyStories.mediaType,
+      contentType: familyStories.contentType,
+      fileSize: familyStories.fileSize,
+      visibility: familyStories.visibility,
+      consentVersion: familyStories.consentVersion,
+      consentConfirmedAt: familyStories.consentConfirmedAt,
+      createdAt: familyStories.createdAt,
+    }).from(familyStories).where(eq(familyStories.ownerUserId, userId));
     const userEvents = await db
       .select()
       .from(activityEvents)
@@ -2242,6 +2355,7 @@ export async function exportUserData(userId: number) {
       family,
       places: placesList,
       communities: communitiesList,
+      familyStories: stories,
       activityLog: userEvents,
     };
 
@@ -2268,7 +2382,12 @@ export async function deleteUserAccount(userId: number) {
       throw new Error('User not found');
     }
 
-    // Log deletion event first for audit integrity before records cascade
+    const stories = await db.select({ storagePath: familyStories.storagePath })
+      .from(familyStories)
+      .where(eq(familyStories.ownerUserId, userId));
+    for (const story of stories) await deleteFamilyStoryObject(story.storagePath);
+
+    // Record deletion only after private media objects have been removed.
     await recordActivityEvent(
       'ACCOUNT_DELETED',
       `User account ID ${userId} deleted by user request`,

@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { RelationshipType } from '../types.ts';
 import { familyGenderOptions, getRelationshipOptions } from '../lib/family-relationships.ts';
+import { ProfileLocationSelector, type ProfileLocationSelection } from './ProfileLocationSelector.tsx';
 
 interface OnboardingModalProps {
   onComplete: () => void;
@@ -31,12 +32,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
   const [bio, setBio] = useState('');
 
   // Step 4: Where do you live?
-  const [liveCity, setLiveCity] = useState('');
-  const [liveCountry, setLiveCountry] = useState('');
+  const [liveLocationSummary, setLiveLocationSummary] = useState('');
+  const [liveLocation, setLiveLocation] = useState<ProfileLocationSelection | null>(null);
 
   // Step 5: Where are you from?
-  const [originCity, setOriginCity] = useState('');
-  const [originCountry, setOriginCountry] = useState('');
+  const [originLocationSummary, setOriginLocationSummary] = useState('');
+  const [originLocation, setOriginLocation] = useState<ProfileLocationSelection | null>(null);
 
   // Step 6: Family/ancestral place
   const [ancestralPlace, setAncestralPlace] = useState('');
@@ -89,29 +90,41 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
       }
     };
     try {
-      // 1. Save profile
+      // 1. Save profile and the selected origin/residence summaries.
+      const profileUpdate: Record<string, string> = {};
       if (firstName || lastName || bio) {
-        await save('/api/user/profile', 'PATCH', { firstName, lastName, bio });
+        profileUpdate.firstName = firstName;
+        profileUpdate.lastName = lastName;
+        profileUpdate.bio = bio;
       }
+      if (liveLocation) profileUpdate.currentResidenceSummary = liveLocation.summary;
+      if (originLocation) profileUpdate.originSummary = originLocation.summary;
+      if (Object.keys(profileUpdate).length > 0) await save('/api/user/profile', 'PATCH', profileUpdate);
 
       // 2. Save where I live (Step 4)
-      if (liveCity.trim() && liveCountry.trim()) {
+      if (liveLocation) {
         await save('/api/places', 'POST', {
-            name: liveCity.trim(),
-            country: liveCountry.trim(),
-            connectionType: 'residence',
-            humanLabel: 'Where I live',
-            isCurrent: true,
+          name: liveLocation.name,
+          country: liveLocation.country,
+          stateRegion: liveLocation.stateRegion,
+          townCity: liveLocation.townCity,
+          placeType: liveLocation.townCity ? 'town' : liveLocation.stateRegion ? 'region' : 'country',
+          connectionType: 'residence',
+          humanLabel: 'Where I live',
+          isCurrent: true,
         });
       }
 
       // 3. Save where I'm from (Step 5)
-      if (originCity.trim() && originCountry.trim()) {
+      if (originLocation) {
         await save('/api/places', 'POST', {
-            name: originCity.trim(),
-            country: originCountry.trim(),
-            connectionType: 'origin',
-            humanLabel: "Where I'm from",
+          name: originLocation.name,
+          country: originLocation.country,
+          stateRegion: originLocation.stateRegion,
+          townCity: originLocation.townCity,
+          placeType: originLocation.townCity ? 'town' : originLocation.stateRegion ? 'region' : 'country',
+          connectionType: 'origin',
+          humanLabel: "Where I'm from",
         });
       }
 
@@ -300,32 +313,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
                 </div>
               </div>
 
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                    City / Town / Locality
-                  </label>
-                  <input
-                    type="text"
-                    value={liveCity}
-                    onChange={(e) => setLiveCity(e.target.value)}
-                    placeholder="e.g. London, Lagos, or Toronto"
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                    Country
-                  </label>
-                  <input
-                    type="text"
-                    value={liveCountry}
-                    onChange={(e) => setLiveCountry(e.target.value)}
-                    placeholder="e.g. United Kingdom, Nigeria, Canada"
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none"
-                  />
-                </div>
-              </div>
+              <ProfileLocationSelector
+                label="Residence"
+                value={liveLocationSummary}
+                onChange={setLiveLocationSummary}
+                onSelectionChange={setLiveLocation}
+              />
             </div>
           )}
 
@@ -344,32 +337,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
                 </div>
               </div>
 
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                    City / Town / Homeland
-                  </label>
-                  <input
-                    type="text"
-                    value={originCity}
-                    onChange={(e) => setOriginCity(e.target.value)}
-                    placeholder="e.g. Enugu, Kingston, or Kumasi"
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                    Country of Origin
-                  </label>
-                  <input
-                    type="text"
-                    value={originCountry}
-                    onChange={(e) => setOriginCountry(e.target.value)}
-                    placeholder="e.g. Nigeria, Jamaica, Ghana"
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none"
-                  />
-                </div>
-              </div>
+              <ProfileLocationSelector
+                label="Personal origin"
+                value={originLocationSummary}
+                onChange={setOriginLocationSummary}
+                onSelectionChange={setOriginLocation}
+              />
             </div>
           )}
 

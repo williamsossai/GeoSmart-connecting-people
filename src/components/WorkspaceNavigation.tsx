@@ -29,6 +29,7 @@ const sectionTabs: Record<WorkspaceSection, Array<{ id: FamilySubView; label: st
     { id: 'overview', label: 'Family overview', hint: 'Connections and relatives' },
     { id: 'tree', label: 'Family tree', hint: 'Explore your family tree' },
     { id: 'invitations', label: 'Invitations', hint: 'Pending invitations and recent activity' },
+    { id: 'stories', label: 'Family stories', hint: 'Private voice and video memories' },
   ],
   community: [{ id: 'overview', label: 'Communities', hint: 'Your connected communities' }],
   place: [{ id: 'overview', label: 'Places', hint: 'Your geographic story' }],

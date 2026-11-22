@@ -7,6 +7,7 @@ import {
 } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
 import type { GeoSmartOverview } from '../types.ts';
+import { getOfflineOverview, saveOfflineOverview, setOfflineUserScope } from '../lib/offline-vault.ts';
 
 export interface AppAuthUser {
   uid: string;
@@ -41,7 +42,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [serviceError, setServiceError] = useState<string | null>(null);
   const [userOverview, setUserOverview] = useState<GeoSmartOverview | null>(null);
 
-  const fetchOverview = async (token: string): Promise<boolean> => {
+  const fetchOverview = async (token: string, userId?: string): Promise<boolean> => {
     try {
       const res = await fetch('/api/user/overview', {
         headers: { Authorization: `Bearer ${token}` },
@@ -50,6 +51,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const data = await res.json();
         setServiceError(null);
         setUserOverview(data);
+        if (userId) void saveOfflineOverview(userId, data);
         return true;
       } else if (res.status === 401) {
         localStorage.removeItem(LOCAL_SESSION_KEY);
@@ -67,6 +69,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } catch (err) {
       console.error('Failed to load user overview:', err);
+      const offlineOverview = userId ? await getOfflineOverview<GeoSmartOverview>(userId) : null;
+      if (offlineOverview) {
+        setUserOverview(offlineOverview);
+        setServiceError(null);
+        return true;
+      }
       setServiceError('Your account is signed in, but GeoSmart could not load your details. Check your connection and try again.');
     }
     return false;
@@ -75,7 +83,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const refreshOverview = async () => {
     if (idToken) {
       setServiceError(null);
-      await fetchOverview(idToken);
+      await fetchOverview(idToken, currentUser?.uid);
     }
   };
 
@@ -88,9 +96,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const parsed = JSON.parse(stored);
         if (parsed?.token && parsed?.user) {
           hasLocalSession = true;
+          setOfflineUserScope(parsed.user.uid);
           setCurrentUser(parsed.user);
           setIdToken(parsed.token);
-          fetchOverview(parsed.token).finally(() => {
+          fetchOverview(parsed.token, parsed.user.uid).finally(() => {
             setLoading(false);
           });
         }
@@ -103,21 +112,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
         localStorage.removeItem(LOCAL_SESSION_KEY);
+        setOfflineUserScope(user.uid);
         setCurrentUser(user);
         try {
-          // Force a refresh so an expired cached token does not strand the user
-          // on the sign-in screen after Firebase has successfully authenticated.
-          const token = await user.getIdToken(true);
+          // Reuse Firebase's valid cached token when offline; the SDK refreshes
+          // it automatically when needed and a connection is available.
+          const token = await user.getIdToken();
           setIdToken(token);
-          await fetchOverview(token);
+          await fetchOverview(token, user.uid);
         } catch (error) {
           console.error('Error fetching token:', error);
+          const offlineOverview = await getOfflineOverview<GeoSmartOverview>(user.uid);
+          if (offlineOverview) {
+            setUserOverview(offlineOverview);
+            setServiceError(null);
+          } else {
+            setServiceError('Your account is signed in, but GeoSmart could not verify your session. Reconnect and try again.');
+          }
         }
         setLoading(false);
       } else if (!hasLocalSession) {
         // Only clear if we don't have an active email/password session
         const currentStored = localStorage.getItem(LOCAL_SESSION_KEY);
         if (!currentStored) {
+          setOfflineUserScope(null);
           setIdToken(null);
           setUserOverview(null);
           setCurrentUser(null);
@@ -154,9 +172,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ token: data.token, user: appUser }));
+    setOfflineUserScope(appUser.uid);
     setCurrentUser(appUser);
     setIdToken(data.token);
-    await fetchOverview(data.token);
+    await fetchOverview(data.token, appUser.uid);
   };
 
   const handleSignUpWithEmail = async (email: string, pass: string, name?: string) => {
@@ -180,9 +199,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ token: data.token, user: appUser }));
+    setOfflineUserScope(appUser.uid);
     setCurrentUser(appUser);
     setIdToken(data.token);
-    await fetchOverview(data.token);
+    await fetchOverview(data.token, appUser.uid);
   };
 
   const handleResetPassword = async (email: string) => {
@@ -198,6 +218,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.warn('Firebase signout skipped:', err);
     }
     setCurrentUser(null);
+    setOfflineUserScope(null);
     setIdToken(null);
     setUserOverview(null);
   };

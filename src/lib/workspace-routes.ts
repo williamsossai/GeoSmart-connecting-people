@@ -1,5 +1,5 @@
 export type WorkspaceSection = 'overview' | 'profile' | 'family' | 'community' | 'place';
-export type FamilySubView = 'overview' | 'tree' | 'invitations';
+export type FamilySubView = 'overview' | 'tree' | 'invitations' | 'stories';
 
 export interface WorkspaceRoute {
   section: WorkspaceSection;
@@ -21,6 +21,7 @@ export const getWorkspacePath = (section: WorkspaceSection, familyView: FamilySu
   if (section === 'overview') return '/';
   if (section === 'family' && familyView === 'tree') return '/family/tree';
   if (section === 'family' && familyView === 'invitations') return '/family/invitations';
+  if (section === 'family' && familyView === 'stories') return '/family/stories';
   return `/${section}`;
 };
 
@@ -35,6 +36,8 @@ export const getWorkspaceRoute = (pathname: string): WorkspaceRoute => {
         ? 'tree'
         : section === 'family' && parts[1] === 'invitations'
           ? 'invitations'
+          : section === 'family' && parts[1] === 'stories'
+            ? 'stories'
           : 'overview',
     };
   }

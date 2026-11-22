@@ -15,6 +15,13 @@
       "when": 1795305600000,
       "tag": "0002_private_community_connections",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795309200000,
+      "tag": "0003_family_stories",
+      "breakpoints": true
     }
   ]
 }

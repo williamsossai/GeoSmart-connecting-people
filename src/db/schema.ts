@@ -217,6 +217,23 @@ export const familyInvitationNotificationStates = pgTable('family_invitation_not
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+// Private media stories shared by an account and, when explicitly enabled, its direct family connections.
+export const familyStories = pgTable('family_stories', {
+  id: serial('id').primaryKey(),
+  ownerUserId: integer('owner_user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  personId: integer('person_id').references(() => people.id, { onDelete: 'cascade' }).notNull(),
+  title: text('title').notNull(),
+  description: text('description'),
+  storagePath: text('storage_path').notNull().unique(),
+  contentType: text('content_type').notNull(),
+  mediaType: text('media_type').notNull(), // 'audio' | 'video'
+  fileSize: integer('file_size').notNull(),
+  visibility: text('visibility').notNull().default('private'), // 'private' | 'family'
+  consentVersion: text('consent_version').notNull(),
+  consentConfirmedAt: timestamp('consent_confirmed_at').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 // Relations declarations
 export const usersRelations = relations(users, ({ one, many }) => ({
   person: one(people, {

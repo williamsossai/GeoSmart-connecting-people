@@ -19,15 +19,25 @@ interface PlaceOption {
   stateRegion: string | null;
 }
 
+export interface ProfileLocationSelection {
+  name: string;
+  country: string;
+  countryCode: string;
+  stateRegion: string | null;
+  townCity: string | null;
+  summary: string;
+}
+
 interface ProfileLocationSelectorProps {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  onSelectionChange?: (selection: ProfileLocationSelection | null) => void;
 }
 
 const selectClassName = 'w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-[#05224C] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500';
 
-export const ProfileLocationSelector: React.FC<ProfileLocationSelectorProps> = ({ label, value, onChange }) => {
+export const ProfileLocationSelector: React.FC<ProfileLocationSelectorProps> = ({ label, value, onChange, onSelectionChange }) => {
   const [countries, setCountries] = useState<CountryOption[]>([]);
   const [regions, setRegions] = useState<RegionOption[]>([]);
   const [places, setPlaces] = useState<PlaceOption[]>([]);
@@ -104,7 +114,20 @@ export const ProfileLocationSelector: React.FC<ProfileLocationSelectorProps> = (
       : region
         ? [region.name, country?.name]
         : [country?.name];
-    onChange(parts.filter(Boolean).join(', '));
+    const summary = parts.filter(Boolean).join(', ');
+    onChange(summary);
+    if (!country) {
+      onSelectionChange?.(null);
+      return;
+    }
+    onSelectionChange?.({
+      name: place?.name || region?.name || country.name,
+      country: country.name,
+      countryCode: country.code,
+      stateRegion: place?.stateRegion || region?.name || null,
+      townCity: place?.name || null,
+      summary,
+    });
   };
 
   const hasCurrentValue = Boolean(value && !countryCode);

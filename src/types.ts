@@ -38,6 +38,20 @@ export type CommunityConnectionType =
 
 export type VisibilitySetting = 'private' | 'shared' | 'public';
 
+export interface FamilyStorySummary {
+  id: number;
+  ownerUserId: number;
+  ownerName: string;
+  title: string;
+  description: string | null;
+  mediaType: 'audio' | 'video';
+  contentType: string;
+  fileSize: number;
+  visibility: 'private' | 'family';
+  createdAt: string;
+  isOwner: boolean;
+}
+
 export interface UserSummary {
   id: number;
   uid: string;

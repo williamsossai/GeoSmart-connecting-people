@@ -1,5 +1,7 @@
 import express from 'express';
 import path from 'path';
+import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import { createServer as createViteServer } from 'vite';
 import { requireAuth, requireAdmin, AuthRequest } from './src/middleware/auth.ts';
 import {
@@ -27,6 +29,10 @@ import {
   connectRegisteredUserToPerson,
   getKinshipDiscoverySuggestions,
   claimDiscoveredPerson,
+  getFamilyStories,
+  createFamilyStory,
+  getFamilyStoryStoragePath,
+  deleteFamilyStory,
   exportUserData,
   deleteUserAccount,
   getAdminMetrics,
@@ -40,6 +46,12 @@ import {
 import { db } from './src/db/index.ts';
 import { sql } from 'drizzle-orm';
 import { CountryStateCity } from '@tansuasici/country-state-city';
+import {
+  deleteFamilyStoryObject,
+  fetchFamilyStoryObject,
+  getFamilyStoryStorageStatus,
+  uploadFamilyStoryObject,
+} from './src/lib/family-story-storage.ts';
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -396,6 +408,112 @@ app.get('/api/family/tree', requireAuth, async (req: AuthRequest, res) => {
   } catch (error: any) {
     console.error('Error in GET /api/family/tree:', error);
     res.status(500).json({ error: 'Failed to generate family tree' });
+  }
+});
+
+app.get('/api/family/stories', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const storage = await getFamilyStoryStorageStatus();
+    const stories = await getFamilyStories(req.dbUser!.id);
+    res.json({ stories, storageReady: storage.ready, storageMessage: storage.message });
+  } catch (error) {
+    console.error('Error in GET /api/family/stories:', error);
+    res.status(503).json({ error: 'Family stories are not available yet. Apply the database migrations and configure private media storage.' });
+  }
+});
+
+app.post(
+  '/api/family/stories',
+  requireAuth,
+  express.raw({ type: ['audio/*', 'video/*'], limit: '50mb' }),
+  async (req: AuthRequest, res) => {
+    let storagePath: string | null = null;
+    let uploaded = false;
+    try {
+      const storage = await getFamilyStoryStorageStatus();
+      if (!storage.ready) return res.status(503).json({ error: storage.message || 'Private media storage is unavailable.' });
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        return res.status(400).json({ error: 'Choose an audio or video file to upload.' });
+      }
+      const decodeStoryHeader = (value: string | undefined) => {
+        if (!value) return '';
+        try { return decodeURIComponent(value).trim(); } catch { return value.trim(); }
+      };
+      const title = decodeStoryHeader(req.header('x-story-title'));
+      const description = decodeStoryHeader(req.header('x-story-description'));
+      const visibility = String(req.header('x-story-visibility') || 'private');
+      const consentConfirmed = req.header('x-story-consent') === 'true';
+      const contentType = String(req.header('content-type') || '').split(';')[0].trim().toLowerCase();
+      const allowedTypes = new Set([
+        'audio/mp4', 'audio/mpeg', 'audio/ogg', 'audio/webm', 'audio/x-m4a',
+        'video/mp4', 'video/quicktime', 'video/webm',
+      ]);
+      if (!title || title.length > 120) return res.status(400).json({ error: 'Enter a title up to 120 characters.' });
+      if (description.length > 1200) return res.status(400).json({ error: 'Description must be 1,200 characters or fewer.' });
+      if (!allowedTypes.has(contentType)) return res.status(400).json({ error: 'Use an MP4, WebM, MP3, OGG, M4A, or QuickTime audio/video file.' });
+      if (visibility !== 'private' && visibility !== 'family') return res.status(400).json({ error: 'Choose private or direct family sharing.' });
+      if (!consentConfirmed) return res.status(400).json({ error: 'Confirm you have permission from living people featured in this story.' });
+
+      const userId = req.dbUser!.id;
+      storagePath = `${userId}/${randomUUID()}`;
+      await uploadFamilyStoryObject(storagePath, contentType, req.body);
+      uploaded = true;
+      const result = await createFamilyStory(userId, {
+        title,
+        description,
+        storagePath,
+        contentType,
+        mediaType: contentType.startsWith('audio/') ? 'audio' : 'video',
+        fileSize: req.body.length,
+        visibility: visibility as 'private' | 'family',
+        consentVersion: 'family-story-consent-v1',
+      });
+      res.status(201).json(result);
+    } catch (error: any) {
+      if (uploaded && storagePath) {
+        try { await deleteFamilyStoryObject(storagePath); } catch (cleanupError) {
+          console.error('Could not clean up an incomplete family story upload:', cleanupError);
+        }
+      }
+      console.error('Error in POST /api/family/stories:', error);
+      res.status(500).json({ error: 'Could not save this story. Please try again.' });
+    }
+  },
+);
+
+app.get('/api/family/stories/:id/media', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const storyId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(storyId) || storyId < 1) return res.status(400).json({ error: 'A valid story is required.' });
+    const storagePath = await getFamilyStoryStoragePath(req.dbUser!.id, storyId);
+    const media = await fetchFamilyStoryObject(storagePath, req.header('range') || undefined);
+    if (!media.ok && media.status !== 206) return res.status(502).json({ error: 'Story media could not be loaded.' });
+    res.setHeader('Content-Type', media.headers.get('content-type') || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    for (const header of ['content-length', 'content-range', 'accept-ranges']) {
+      const value = media.headers.get(header);
+      if (value) res.setHeader(header, value);
+    }
+    res.status(media.status);
+    if (media.body) Readable.fromWeb(media.body as any).pipe(res);
+    else res.end();
+  } catch (error: any) {
+    console.error('Error in GET /api/family/stories/:id/media:', error);
+    const status = String(error?.message || '').includes('access') ? 403 : 404;
+    res.status(status).json({ error: 'Story not found or you do not have access.' });
+  }
+});
+
+app.delete('/api/family/stories/:id', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const storyId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(storyId) || storyId < 1) return res.status(400).json({ error: 'A valid story is required.' });
+    const result = await deleteFamilyStory(req.dbUser!.id, storyId);
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error in DELETE /api/family/stories/:id:', error);
+    res.status(404).json({ error: 'Story not found or could not be deleted.' });
   }
 });
 
