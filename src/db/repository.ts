@@ -169,6 +169,46 @@ export async function ensureUserPerson(userId: number, email: string, displayNam
   }
 }
 
+async function mergeClaimedPersonIntoAccount(
+  tx: any,
+  userId: number,
+  invitedPerson: typeof people.$inferSelect,
+  accountPerson: typeof people.$inferSelect,
+  invitationId: number,
+) {
+  if (invitedPerson.id === accountPerson.id) return invitedPerson.id;
+
+  // Keep the person ID already used by the inviter's tree, but move the account's
+  // own profile and connections onto it so the new owner's privacy setting applies.
+  await tx.delete(profiles).where(eq(profiles.personId, invitedPerson.id));
+  await tx.update(profiles)
+    .set({ personId: invitedPerson.id, updatedAt: new Date() })
+    .where(eq(profiles.personId, accountPerson.id));
+  await tx.update(personRelationships).set({ personAId: invitedPerson.id }).where(eq(personRelationships.personAId, accountPerson.id));
+  await tx.update(personRelationships).set({ personBId: invitedPerson.id }).where(eq(personRelationships.personBId, accountPerson.id));
+  await tx.update(personPlaces).set({ personId: invitedPerson.id }).where(eq(personPlaces.personId, accountPerson.id));
+  await tx.update(personCommunities).set({ personId: invitedPerson.id }).where(eq(personCommunities.personId, accountPerson.id));
+  await tx.update(familyMembers).set({ personId: invitedPerson.id }).where(eq(familyMembers.personId, accountPerson.id));
+  await tx.update(people).set({
+    userId,
+    firstName: accountPerson.firstName,
+    lastName: accountPerson.lastName,
+    otherNames: accountPerson.otherNames,
+    gender: accountPerson.gender,
+    birthDate: accountPerson.birthDate,
+    isLiving: accountPerson.isLiving,
+    updatedAt: new Date(),
+  }).where(eq(people.id, invitedPerson.id));
+  await tx.update(familyInvitations).set({ status: 'expired' }).where(and(
+    eq(familyInvitations.personId, invitedPerson.id),
+    eq(familyInvitations.status, 'pending'),
+    ne(familyInvitations.id, invitationId),
+  ));
+  await tx.delete(people).where(eq(people.id, accountPerson.id));
+
+  return invitedPerson.id;
+}
+
 // 3. Get Complete User Overview
 export async function getUserOverview(userId: number) {
   try {
@@ -229,6 +269,20 @@ export async function getUserOverview(userId: number) {
       .orderBy(desc(activityEvents.createdAt))
       .limit(5);
 
+    const recentPrivacyEvents = await db
+      .select({
+        id: activityEvents.id,
+        metadata: activityEvents.metadata,
+        createdAt: activityEvents.createdAt,
+      })
+      .from(activityEvents)
+      .where(and(
+        eq(activityEvents.userId, userId),
+        eq(activityEvents.eventType, 'PROFILE_SHARING_PREFERENCE_UPDATED'),
+      ))
+      .orderBy(desc(activityEvents.createdAt))
+      .limit(5);
+
     return {
       user: {
         id: user.id,
@@ -271,6 +325,20 @@ export async function getUserOverview(userId: number) {
         summary: e.summary,
         createdAt: e.createdAt.toISOString(),
       })),
+      privacyHistory: recentPrivacyEvents.map((event) => {
+        let metadata: Record<string, string> = {};
+        try {
+          metadata = event.metadata ? JSON.parse(event.metadata) : {};
+        } catch {
+          metadata = {};
+        }
+        return {
+          id: event.id,
+          previous: metadata.previous || 'private',
+          selected: metadata.selected || 'private',
+          createdAt: event.createdAt.toISOString(),
+        };
+      }),
     };
   } catch (error) {
     console.error('Database error in getUserOverview:', error);
@@ -294,6 +362,7 @@ export async function updateUserProfile(
 ) {
   try {
     const person = await ensureUserPerson(userId, '');
+    const [previousProfile] = await db.select().from(profiles).where(eq(profiles.personId, person.id));
     
     // Update person name if provided
     if (data.firstName || data.lastName || data.otherNames !== undefined) {
@@ -346,6 +415,21 @@ export async function updateUserProfile(
       'profile',
       updatedProfile.id
     );
+
+    if (data.visibility && previousProfile?.visibility !== data.visibility) {
+      await recordActivityEvent(
+        'PROFILE_SHARING_PREFERENCE_UPDATED',
+        'Profile sharing preference changed',
+        userId,
+        'profile',
+        updatedProfile.id,
+        {
+          scope: 'profile_details_through_family_connections',
+          previous: previousProfile?.visibility || 'private',
+          selected: data.visibility,
+        }
+      );
+    }
 
     return updatedProfile;
   } catch (error) {
@@ -1021,7 +1105,10 @@ export async function getUserFamily(userId: number) {
 
         const [profile] = await db.select().from(profiles).where(eq(profiles.personId, otherPerson.id));
         const isAnotherAccount = Boolean(otherPerson.userId && otherPerson.userId !== userId);
-        const canViewSharedDetails = !isAnotherAccount || profile?.visibility === 'shared' || profile?.visibility === 'public';
+        const hasClaimedLivingRecord = !otherPerson.isLiving || Boolean(otherPerson.userId);
+        const canViewSharedDetails = hasClaimedLivingRecord && (
+          !isAnotherAccount || profile?.visibility === 'shared' || profile?.visibility === 'public'
+        );
         const visiblePlaceFilter = isAnotherAccount
           ? and(eq(personPlaces.personId, otherPerson.id), or(eq(personPlaces.visibility, 'shared'), eq(personPlaces.visibility, 'public')))
           : eq(personPlaces.personId, otherPerson.id);
@@ -1069,8 +1156,8 @@ export async function getUserFamily(userId: number) {
           isLiving: otherPerson.isLiving,
           relationshipType: displayedType,
           inverseRelationshipType: rel.inverseRelationshipType,
-          notes: rel.notes,
-          placesCount: Number(placeCountRes[0]?.count || 0),
+          notes: hasClaimedLivingRecord ? rel.notes : null,
+          placesCount: hasClaimedLivingRecord ? Number(placeCountRes[0]?.count || 0) : 0,
           userId: otherPerson.userId,
           hasAccount: Boolean(otherPerson.userId),
           userEmail: null,
@@ -1078,7 +1165,7 @@ export async function getUserFamily(userId: number) {
           visibility: profile?.visibility || 'private',
           originSummary: canViewSharedDetails ? profile?.originSummary || null : null,
           currentResidenceSummary: canViewSharedDetails ? profile?.currentResidenceSummary || null : null,
-          placeOfOrigin: originRes[0] || null,
+          placeOfOrigin: canViewSharedDetails ? originRes[0] || null : null,
         });
       }
     }
@@ -1340,10 +1427,7 @@ export async function addFamilyMember(
             ((other.firstName || '').trim().toLowerCase() === data.firstName.trim().toLowerCase() &&
               (other.lastName || '').trim().toLowerCase() === data.lastName.trim().toLowerCase()))
         ) {
-          // Already exists: update notes if provided and return existing connection to prevent duplicates
-          if (data.notes) {
-            await db.update(personRelationships).set({ notes: data.notes }).where(eq(personRelationships.id, er.id));
-          }
+          // Existing account records are managed by their owner; do not alter them here.
           await consolidateFamilyConnections(userId);
           return {
             relationship: er,
@@ -1378,10 +1462,7 @@ export async function addFamilyMember(
           (other.lastName || '').trim().toLowerCase() === data.lastName.trim().toLowerCase() &&
           er.relationshipType === data.relationshipType
         ) {
-          // Already connected with same name & relation: return existing to avoid duplicate
-          if (data.notes) {
-            await db.update(personRelationships).set({ notes: data.notes }).where(eq(personRelationships.id, er.id));
-          }
+          // Keep an existing living relative as a minimal placeholder until they claim it.
           await consolidateFamilyConnections(userId);
           return {
             relationship: er,
@@ -1397,9 +1478,9 @@ export async function addFamilyMember(
         .values({
           firstName: data.firstName.trim(),
           lastName: data.lastName.trim(),
-          otherNames: data.otherNames || null,
+          otherNames: data.isLiving === false ? data.otherNames || null : null,
           gender: data.gender && data.gender !== 'unspecified' ? data.gender : null,
-          birthDate: data.birthDate || null,
+          birthDate: data.isLiving === false ? data.birthDate || null : null,
           isLiving: data.isLiving !== undefined ? Boolean(data.isLiving) : true,
           createdByUserId: userId,
           userId: null,
@@ -1417,6 +1498,11 @@ export async function addFamilyMember(
 
     // 3. Create relationship record (from userPerson -> familyPerson)
     const inverseType = getInverseRelationship(data.relationshipType, data.gender);
+    const [linkedPerson] = await db
+      .select({ isLiving: people.isLiving, userId: people.userId })
+      .from(people)
+      .where(eq(people.id, familyPersonId));
+    const canStoreUnclaimedDetails = linkedPerson?.isLiving === false && linkedPerson.userId === null;
 
     const [relationship] = await db
       .insert(personRelationships)
@@ -1425,14 +1511,14 @@ export async function addFamilyMember(
         personBId: familyPersonId,
         relationshipType: data.relationshipType,
         inverseRelationshipType: inverseType,
-        notes: data.notes || null,
+        notes: canStoreUnclaimedDetails ? data.notes || null : null,
         visibility: data.visibility || 'private',
         createdByUserId: userId,
       })
       .returning();
 
     // 4. Optionally connect place of origin for family member
-    if (data.placeOfOrigin?.name && data.placeOfOrigin?.country) {
+    if (canStoreUnclaimedDetails && data.placeOfOrigin?.name && data.placeOfOrigin?.country) {
       await addPlaceConnection(userId, {
         name: data.placeOfOrigin.name,
         country: data.placeOfOrigin.country,
@@ -1861,11 +1947,7 @@ export async function acceptFamilyInvitation(userId: number, inviteCode: string,
       if (!userPerson || !inviterPerson) throw new Error('A family account record could not be found.');
 
       const now = new Date();
-      const [linked] = await tx.update(people).set({ userId }).where(and(
-        eq(people.id, familyPerson.id),
-        isNull(people.userId)
-      )).returning({ id: people.id });
-      if (!linked) throw new Error('This family record has already been claimed.');
+      await mergeClaimedPersonIntoAccount(tx, userId, familyPerson, userPerson, invitation.id);
 
       const [claimed] = await tx.update(familyInvitations).set({
         status: 'accepted',
@@ -1880,12 +1962,12 @@ export async function acceptFamilyInvitation(userId: number, inviteCode: string,
       const inverseType = getInverseRelationship(invitation.relationshipType as RelationshipType);
       const [reciprocal] = await tx.select({ id: personRelationships.id }).from(personRelationships).where(and(
         eq(personRelationships.createdByUserId, userId),
-        eq(personRelationships.personAId, userPerson.id),
+        eq(personRelationships.personAId, familyPerson.id),
         eq(personRelationships.personBId, inviterPerson.id)
       ));
       if (!reciprocal) {
         await tx.insert(personRelationships).values({
-          personAId: userPerson.id,
+          personAId: familyPerson.id,
           personBId: inviterPerson.id,
           relationshipType: inverseType,
           inverseRelationshipType: invitation.relationshipType,
@@ -2016,11 +2098,7 @@ export async function claimDiscoveredPerson(userId: number, invitationId: number
       const [creatorPerson] = await tx.select().from(people).where(eq(people.userId, invitation.inviterUserId));
       if (!userPerson || !creatorPerson) throw new Error('A family account record could not be found.');
 
-      const [linked] = await tx.update(people).set({ userId }).where(and(
-        eq(people.id, person.id),
-        isNull(people.userId)
-      )).returning({ id: people.id });
-      if (!linked) throw new Error('This family record has already been claimed.');
+      await mergeClaimedPersonIntoAccount(tx, userId, person, userPerson, invitation.id);
 
       const [claimed] = await tx.update(familyInvitations).set({
         status: 'accepted', acceptedByUserId: userId, acceptedAt: new Date(),
@@ -2033,12 +2111,12 @@ export async function claimDiscoveredPerson(userId: number, invitationId: number
       const inverseType = getInverseRelationship(invitation.relationshipType as RelationshipType);
       const [existing] = await tx.select({ id: personRelationships.id }).from(personRelationships).where(and(
         eq(personRelationships.createdByUserId, userId),
-        eq(personRelationships.personAId, userPerson.id),
+        eq(personRelationships.personAId, person.id),
         eq(personRelationships.personBId, creatorPerson.id)
       ));
       if (!existing) {
         await tx.insert(personRelationships).values({
-          personAId: userPerson.id,
+          personAId: person.id,
           personBId: creatorPerson.id,
           relationshipType: inverseType,
           inverseRelationshipType: invitation.relationshipType,

@@ -205,6 +205,12 @@ export interface GeoSmartOverview {
     summary: string;
     createdAt: string;
   }>;
+  privacyHistory: Array<{
+    id: number;
+    previous: VisibilitySetting;
+    selected: VisibilitySetting;
+    createdAt: string;
+  }>;
 }
 
 export interface AdminPlatformMetrics {

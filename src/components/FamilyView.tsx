@@ -21,7 +21,6 @@ import type {
   FamilyTreeGraph,
   FamilyTreeNode,
   RelationshipType,
-  VisibilitySetting,
 } from '../types.ts';
 import { FamilyTreeCanvas } from './FamilyTreeCanvas.tsx';
 import { FamilyMemberDetailModal } from './FamilyMemberDetailModal.tsx';
@@ -33,27 +32,6 @@ import { familyGenderOptions, getRelationshipLabel, getRelationshipOptions } fro
 interface FamilyViewProps {
   activeSubView?: 'overview' | 'tree' | 'invitations';
   onSubViewChange?: (view: 'overview' | 'tree' | 'invitations') => void;
-}
-
-interface StandardLocationOption {
-  id: number;
-  name: string;
-  country: string;
-  countryCode: string;
-  stateRegion: string | null;
-  stateCode: string | null;
-}
-
-interface StandardCountryOption {
-  id: number;
-  code: string;
-  name: string;
-}
-
-interface StandardRegionOption {
-  id: number;
-  code: string;
-  name: string;
 }
 
 type FamilyOverviewView =
@@ -137,21 +115,8 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
   // Add Member Form states
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
-  const [otherNames, setOtherNames] = useState('');
   const [gender, setGender] = useState('unspecified');
   const [relationshipType, setRelationshipType] = useState<RelationshipType>('parent');
-  const [originCountries, setOriginCountries] = useState<StandardCountryOption[]>([]);
-  const [originRegions, setOriginRegions] = useState<StandardRegionOption[]>([]);
-  const [originPlaces, setOriginPlaces] = useState<StandardLocationOption[]>([]);
-  const [originCountryCode, setOriginCountryCode] = useState('');
-  const [originRegionId, setOriginRegionId] = useState('');
-  const [originPlaceId, setOriginPlaceId] = useState('');
-  const [originCountriesLoading, setOriginCountriesLoading] = useState(false);
-  const [originRegionsLoading, setOriginRegionsLoading] = useState(false);
-  const [originPlacesLoading, setOriginPlacesLoading] = useState(false);
-  const [originLocationError, setOriginLocationError] = useState<string | null>(null);
-  const [notes, setNotes] = useState('');
-  const [visibility, setVisibility] = useState<VisibilitySetting>('private');
   const [submitting, setSubmitting] = useState(false);
 
   // Load Tree & Members
@@ -188,68 +153,6 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
     loadFamilyData();
   }, [idToken]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setOriginCountriesLoading(true);
-    fetch('/api/locations/countries')
-      .then(async (res) => {
-        if (!res.ok) throw new Error('Failed to load countries');
-        return res.json() as Promise<StandardCountryOption[]>;
-      })
-      .then((countries) => { if (!cancelled) setOriginCountries(countries); })
-      .catch((error) => {
-        console.error('Failed to load standard countries:', error);
-        if (!cancelled) setOriginLocationError('Could not load the location list. Please try again.');
-      })
-      .finally(() => { if (!cancelled) setOriginCountriesLoading(false); });
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    if (!originCountryCode) {
-      setOriginRegions([]);
-      setOriginRegionsLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setOriginRegionsLoading(true);
-    fetch(`/api/locations/regions?countryCode=${encodeURIComponent(originCountryCode)}`)
-      .then(async (res) => {
-        if (!res.ok) throw new Error('Failed to load regions');
-        return res.json() as Promise<StandardRegionOption[]>;
-      })
-      .then((regions) => { if (!cancelled) setOriginRegions(regions); })
-      .catch((error) => {
-        console.error('Failed to load standard regions:', error);
-        if (!cancelled) setOriginLocationError('Could not load regions for this country.');
-      })
-      .finally(() => { if (!cancelled) setOriginRegionsLoading(false); });
-    return () => { cancelled = true; };
-  }, [originCountryCode]);
-
-  useEffect(() => {
-    if (!originCountryCode || originRegionsLoading || (originRegions.length > 0 && !originRegionId)) {
-      setOriginPlaces([]);
-      setOriginPlacesLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setOriginPlacesLoading(true);
-    const regionQuery = originRegionId ? `&regionId=${encodeURIComponent(originRegionId)}` : '';
-    fetch(`/api/locations/places?countryCode=${encodeURIComponent(originCountryCode)}${regionQuery}`)
-      .then(async (res) => {
-        if (!res.ok) throw new Error('Failed to load populated places');
-        return res.json() as Promise<StandardLocationOption[]>;
-      })
-      .then((places) => { if (!cancelled) setOriginPlaces(places); })
-      .catch((error) => {
-        console.error('Failed to load standard places:', error);
-        if (!cancelled) setOriginLocationError('Could not load places for this area.');
-      })
-      .finally(() => { if (!cancelled) setOriginPlacesLoading(false); });
-    return () => { cancelled = true; };
-  }, [originCountryCode, originRegionId, originRegions, originRegionsLoading]);
-
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!idToken) return;
@@ -258,7 +161,6 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
     setSuccessMsg(null);
 
     try {
-      const selectedOrigin = originPlaces.find((place) => String(place.id) === originPlaceId);
       const res = await fetch('/api/family', {
         method: 'POST',
         headers: {
@@ -268,20 +170,8 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
         body: JSON.stringify({
           firstName: firstName.trim(),
           lastName: lastName.trim(),
-          otherNames: otherNames.trim() || undefined,
           gender,
           relationshipType,
-          notes: notes.trim() || undefined,
-          visibility,
-          placeOfOrigin: selectedOrigin
-            ? {
-                name: selectedOrigin.name,
-                country: selectedOrigin.country,
-                stateRegion: selectedOrigin.stateRegion || undefined,
-                townCity: selectedOrigin.name,
-                placeType: 'town',
-              }
-            : undefined,
         }),
       });
 
@@ -297,15 +187,8 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
       setShowAddModal(false);
       setFirstName('');
       setLastName('');
-      setOtherNames('');
       setGender('unspecified');
       setRelationshipType('parent');
-      setOriginCountryCode('');
-      setOriginRegionId('');
-      setOriginPlaceId('');
-      setOriginRegions([]);
-      setOriginPlaces([]);
-      setNotes('');
       setSuccessMsg('Family member connected successfully.');
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
@@ -1156,119 +1039,9 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
                 </select>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  Other / Middle Names (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={otherNames}
-                  onChange={(e) => setOtherNames(e.target.value)}
-                  placeholder="e.g. Chukwuma"
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  Place of Origin / Roots (Optional)
-                </label>
-                <div className="space-y-2">
-                  <select
-                    aria-label="Origin country"
-                    value={originCountryCode}
-                    disabled={originCountriesLoading || originCountries.length === 0}
-                    onChange={(e) => {
-                      setOriginCountryCode(e.target.value);
-                      setOriginRegionId('');
-                      setOriginPlaceId('');
-                      setOriginRegions([]);
-                      setOriginPlaces([]);
-                      setOriginLocationError(null);
-                    }}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#05224C] disabled:bg-slate-100"
-                  >
-                    <option value="">{originCountriesLoading ? 'Loading countries…' : 'Select a country'}</option>
-                    {originCountries.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}
-                  </select>
-
-                  <select
-                    aria-label="Origin state or region"
-                    value={originRegionId}
-                    disabled={!originCountryCode || originRegionsLoading || originRegions.length === 0}
-                    onChange={(e) => {
-                      setOriginRegionId(e.target.value);
-                      setOriginPlaceId('');
-                      setOriginPlaces([]);
-                      setOriginLocationError(null);
-                    }}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#05224C] disabled:bg-slate-100"
-                  >
-                    <option value="">
-                      {originRegionsLoading
-                        ? 'Loading regions…'
-                        : !originCountryCode
-                          ? 'Select a country first'
-                          : originRegions.length === 0
-                            ? 'No region selection needed'
-                            : 'Select a state or region'}
-                    </option>
-                    {originRegions.map((region) => <option key={region.id} value={region.id}>{region.name}</option>)}
-                  </select>
-
-                  <select
-                    aria-label="Origin town, city, or village"
-                    value={originPlaceId}
-                    disabled={!originCountryCode || originPlacesLoading || (originRegions.length > 0 && !originRegionId)}
-                    onChange={(e) => setOriginPlaceId(e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#05224C] disabled:bg-slate-100"
-                  >
-                    <option value="">
-                      {originPlacesLoading
-                        ? 'Loading towns and cities…'
-                        : !originCountryCode
-                          ? 'Select a country first'
-                          : originRegions.length > 0 && !originRegionId
-                            ? 'Select a state or region first'
-                            : 'Select a town, city, or village'}
-                    </option>
-                    {originPlaces.map((place) => <option key={place.id} value={place.id}>{place.name}</option>)}
-                  </select>
-                </div>
-                <p className="mt-1 text-xs text-slate-500" aria-live="polite">
-                  {originLocationError || (originPlaceId ? 'Selected place will be saved as this relative’s roots.' : 'Choose a country, then a region and populated place from the lists.')}
-                </p>
-                <p className="mt-1 text-[10px] text-slate-400">
-                  Contains data from <a href="https://github.com/dr5hn/countries-states-cities-database" target="_blank" rel="noreferrer" className="underline hover:text-slate-600">Countries States Cities Database</a> under the <a href="https://opendatacommons.org/licenses/odbl/1-0/" target="_blank" rel="noreferrer" className="underline hover:text-slate-600">ODbL</a>.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  Notes (Optional)
-                </label>
-                <input
-                  type="text"
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="e.g. Maternal grandfather or eldest sister"
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  Privacy Setting
-                </label>
-                <select
-                  value={visibility}
-                  onChange={(e) => setVisibility(e.target.value as VisibilitySetting)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none bg-white"
-                >
-                  <option value="private">Private (Only visible to you)</option>
-                  <option value="shared">Shared (Visible to verified family)</option>
-                  <option value="public">Public</option>
-                </select>
+              <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2.5">
+                <p className="text-xs font-semibold text-slate-800">Living relative privacy</p>
+                <p className="mt-1 text-xs text-slate-600">This creates a basic family placeholder. Invite your relative to claim it; they can add personal details and roots themselves after joining.</p>
               </div>
 
               <div className="pt-2 flex items-center justify-end space-x-3">

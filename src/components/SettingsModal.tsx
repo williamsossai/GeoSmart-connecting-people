@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAuth } from './AuthContext.tsx';
 import { useInvitationNotifications } from './InvitationNotificationsContext.tsx';
 import {
@@ -44,6 +44,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [discoveryNotifications, setDiscoveryNotifications] = useState(true);
   const [savingMatchAlerts, setSavingMatchAlerts] = useState(false);
   const [matchAlertsError, setMatchAlertsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) setVisibility(userOverview?.profile?.visibility || 'private');
+  }, [isOpen, userOverview?.profile?.visibility]);
 
   // Export state
   const [exporting, setExporting] = useState(false);
@@ -190,7 +194,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div>
                 <h4 className="text-sm font-bold text-slate-900">Record Visibility Default</h4>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Control who can see your biography, connected places, and family relationships.
+                  Private hides profile details from other accounts. Shared and Public currently have the same effect: connected family accounts can see them. Neither makes your profile web searchable. Place records have separate visibility settings.
                 </p>
               </div>
 
@@ -216,7 +220,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <span className="text-xs font-bold">Private</span>
                   </div>
                   <p className="text-[11px] text-slate-500">
-                    Only you can view your personal records and connected nodes.
+                    Your profile details are not shown to other connected accounts.
                   </p>
                 </button>
 
@@ -234,7 +238,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <span className="text-xs font-bold">Shared</span>
                   </div>
                   <p className="text-[11px] text-slate-500">
-                    Visible to verified family members in your connected network.
+                    Profile details may be shown to people connected through family records.
                   </p>
                 </button>
 
@@ -252,7 +256,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <span className="text-xs font-bold">Public</span>
                   </div>
                   <p className="text-[11px] text-slate-500">
-                    Discoverable by relatives via town of origin and kinship matching.
+                    Profile details may be shown through family connections. This setting does not make your profile publicly searchable on the web.
                   </p>
                 </button>
               </div>
@@ -266,6 +270,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 >
                   {savingPrivacy ? 'Saving...' : 'Save Privacy Setting'}
                 </button>
+              </div>
+
+              <div className="border-t border-slate-200 pt-4">
+                <h5 className="text-xs font-bold text-slate-800">Recent sharing choices</h5>
+                <p className="mt-0.5 text-[11px] text-slate-500">The five most recent changes to profile sharing.</p>
+                {userOverview?.privacyHistory?.length ? (
+                  <ul className="mt-2 space-y-2">
+                    {userOverview.privacyHistory.map((entry) => {
+                      const label = (value: VisibilitySetting) => value === 'private' ? 'Private' : value === 'shared' ? 'Shared' : 'Public';
+                      return (
+                        <li key={entry.id} className="flex items-center justify-between gap-3 text-[11px]">
+                          <span className="text-slate-700">{label(entry.previous)} → {label(entry.selected)}</span>
+                          <time className="shrink-0 text-slate-500" dateTime={entry.createdAt}>
+                            {new Date(entry.createdAt).toLocaleString()}
+                          </time>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-[11px] text-slate-500">No profile sharing changes recorded yet.</p>
+                )}
               </div>
             </div>
           )}

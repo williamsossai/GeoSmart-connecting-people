@@ -192,6 +192,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1">
               Privacy & Visibility
             </label>
+            <p className="mb-2 text-[11px] text-slate-500">Shared and Public currently show profile details to connected family accounts. Neither makes your profile web searchable.</p>
             <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
@@ -222,7 +223,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
                   <Share2 className="w-3.5 h-3.5 text-sky-600" />
                   <span className="text-xs">Shared</span>
                 </div>
-                <span className="text-[10px] text-slate-400">Verified family</span>
+                <span className="text-[10px] text-slate-400">Family connections</span>
               </button>
 
               <button
@@ -238,7 +239,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
                   <Globe className="w-3.5 h-3.5 text-emerald-600" />
                   <span className="text-xs">Public</span>
                 </div>
-                <span className="text-[10px] text-slate-400">Discovery pool</span>
+                <span className="text-[10px] text-slate-400">Family connections</span>
               </button>
             </div>
           </div>
