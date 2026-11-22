@@ -13,7 +13,7 @@ import {
   Tag,
   Building2,
 } from 'lucide-react';
-import type { CommunityWithConnection, VisibilitySetting } from '../types.ts';
+import type { CommunityWithConnection } from '../types.ts';
 
 export const CommunityView: React.FC = () => {
   const { idToken, refreshOverview } = useAuth();
@@ -34,7 +34,6 @@ export const CommunityView: React.FC = () => {
   const [humanLabel, setHumanLabel] = useState('');
   const [description, setDescription] = useState('');
   const [notes, setNotes] = useState('');
-  const [visibility, setVisibility] = useState<VisibilitySetting>('private');
   const [submitting, setSubmitting] = useState(false);
 
   const fetchCommunities = async () => {
@@ -80,7 +79,6 @@ export const CommunityView: React.FC = () => {
           humanLabel: humanLabel.trim() || undefined,
           description: description.trim() || undefined,
           notes: notes.trim() || undefined,
-          visibility,
         }),
       });
 
@@ -261,7 +259,7 @@ export const CommunityView: React.FC = () => {
                         {c.humanLabel || formatType(c.connectionType)}
                       </span>
                     </div>
-                    <span className="capitalize text-slate-400">{c.visibility}</span>
+                    <span className="text-slate-500">Private</span>
                   </div>
                 </div>
               );
@@ -366,20 +364,9 @@ export const CommunityView: React.FC = () => {
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  Privacy Setting
-                </label>
-                <select
-                  value={visibility}
-                  onChange={(e) => setVisibility(e.target.value as VisibilitySetting)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none bg-white"
-                >
-                  <option value="private">Private (Only visible to you)</option>
-                  <option value="shared">Shared (Visible to verified family)</option>
-                  <option value="public">Public</option>
-                </select>
-              </div>
+              <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                Community connections are private to your account. Sharing them with others is not available yet.
+              </p>
 
               <div className="pt-2 flex items-center justify-end space-x-3">
                 <button

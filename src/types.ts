@@ -104,6 +104,7 @@ export interface FamilyTreeNode {
   generation: number;
   generationLabel: string;
   isSelf: boolean;
+  isLiving: boolean;
   hasAccount: boolean;
   userId?: number | null;
   userEmail?: string | null;
@@ -209,6 +210,7 @@ export interface GeoSmartOverview {
     id: number;
     previous: VisibilitySetting;
     selected: VisibilitySetting;
+    scope: 'Profile' | 'Place';
     createdAt: string;
   }>;
 }

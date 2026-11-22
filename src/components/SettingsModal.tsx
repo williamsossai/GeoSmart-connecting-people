@@ -16,7 +16,7 @@ import {
   Bell,
   User,
 } from 'lucide-react';
-import type { VisibilitySetting } from '../types.ts';
+import type { CommunityWithConnection, PlaceWithConnection, VisibilitySetting } from '../types.ts';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -39,6 +39,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [savingPrivacy, setSavingPrivacy] = useState(false);
   const [privacySuccess, setPrivacySuccess] = useState<string | null>(null);
+  const [privacyRecordsLoading, setPrivacyRecordsLoading] = useState(false);
+  const [privacyRecordsError, setPrivacyRecordsError] = useState<string | null>(null);
+  const [placeConnections, setPlaceConnections] = useState<PlaceWithConnection[]>([]);
+  const [communityConnections, setCommunityConnections] = useState<CommunityWithConnection[]>([]);
+  const [savingPlaceConnectionId, setSavingPlaceConnectionId] = useState<number | null>(null);
 
   // Preference toggles (saved locally / session)
   const [discoveryNotifications, setDiscoveryNotifications] = useState(true);
@@ -48,6 +53,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   useEffect(() => {
     if (isOpen) setVisibility(userOverview?.profile?.visibility || 'private');
   }, [isOpen, userOverview?.profile?.visibility]);
+
+  useEffect(() => {
+    if (!isOpen || !idToken) return;
+    let cancelled = false;
+    setPrivacyRecordsLoading(true);
+    setPrivacyRecordsError(null);
+    Promise.all([
+      fetch('/api/places', { headers: { Authorization: `Bearer ${idToken}` } }),
+      fetch('/api/communities', { headers: { Authorization: `Bearer ${idToken}` } }),
+    ])
+      .then(async ([placesResponse, communitiesResponse]) => {
+        if (!placesResponse.ok || !communitiesResponse.ok) throw new Error('Could not load all privacy records.');
+        const [places, communities] = await Promise.all([
+          placesResponse.json() as Promise<PlaceWithConnection[]>,
+          communitiesResponse.json() as Promise<CommunityWithConnection[]>,
+        ]);
+        if (!cancelled) {
+          setPlaceConnections(places);
+          setCommunityConnections(communities);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load privacy records:', error);
+        if (!cancelled) setPrivacyRecordsError('Could not load place and community privacy settings.');
+      })
+      .finally(() => { if (!cancelled) setPrivacyRecordsLoading(false); });
+    return () => { cancelled = true; };
+  }, [isOpen, idToken]);
 
   // Export state
   const [exporting, setExporting] = useState(false);
@@ -77,6 +110,50 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       console.error('Error updating privacy:', err);
     } finally {
       setSavingPrivacy(false);
+    }
+  };
+
+  const handlePlaceVisibilityChange = async (place: PlaceWithConnection, nextVisibility: VisibilitySetting) => {
+    if (!idToken || nextVisibility === place.visibility) return;
+    setSavingPlaceConnectionId(place.connectionId);
+    setPrivacyRecordsError(null);
+    try {
+      const res = await fetch(`/api/places/${place.connectionId}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({
+          name: place.name,
+          country: place.country,
+          stateRegion: place.stateRegion,
+          districtLga: place.districtLga,
+          townCity: place.townCity,
+          villageLocality: place.villageLocality,
+          placeType: place.placeType,
+          connectionType: place.connectionType,
+          humanLabel: place.humanLabel,
+          isCurrent: place.isCurrent,
+          notes: place.notes,
+          visibility: nextVisibility,
+        }),
+      });
+      if (!res.ok) {
+        const result = await res.json().catch(() => ({}));
+        throw new Error(result.error || 'Could not update this place sharing setting.');
+      }
+      setPlaceConnections((current) => current.map((item) => (
+        item.connectionId === place.connectionId ? { ...item, visibility: nextVisibility } : item
+      )));
+      await refreshOverview();
+      setPrivacySuccess('Place sharing setting saved.');
+      setTimeout(() => setPrivacySuccess(null), 3000);
+    } catch (error: any) {
+      console.error('Failed to update place sharing:', error);
+      setPrivacyRecordsError(error.message || 'Could not update this place sharing setting.');
+    } finally {
+      setSavingPlaceConnectionId(null);
     }
   };
 
@@ -274,14 +351,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               <div className="border-t border-slate-200 pt-4">
                 <h5 className="text-xs font-bold text-slate-800">Recent sharing choices</h5>
-                <p className="mt-0.5 text-[11px] text-slate-500">The five most recent changes to profile sharing.</p>
+                <p className="mt-0.5 text-[11px] text-slate-500">The five most recent profile or place sharing changes.</p>
                 {userOverview?.privacyHistory?.length ? (
                   <ul className="mt-2 space-y-2">
                     {userOverview.privacyHistory.map((entry) => {
                       const label = (value: VisibilitySetting) => value === 'private' ? 'Private' : value === 'shared' ? 'Shared' : 'Public';
                       return (
                         <li key={entry.id} className="flex items-center justify-between gap-3 text-[11px]">
-                          <span className="text-slate-700">{label(entry.previous)} → {label(entry.selected)}</span>
+                          <span className="text-slate-700">{entry.scope}: {label(entry.previous)} → {label(entry.selected)}</span>
                           <time className="shrink-0 text-slate-500" dateTime={entry.createdAt}>
                             {new Date(entry.createdAt).toLocaleString()}
                           </time>
@@ -293,6 +370,58 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <p className="mt-2 text-[11px] text-slate-500">No profile sharing changes recorded yet.</p>
                 )}
               </div>
+
+              <div className="border-t border-slate-200 pt-4">
+                <h5 className="text-xs font-bold text-slate-800">Place sharing</h5>
+                <p className="mt-0.5 text-[11px] text-slate-500">An origin or residence appears in a family view only when both your profile and that place allow sharing. Shared and Public currently have the same effect; Public does not create a web listing.</p>
+                {privacyRecordsLoading ? (
+                  <p className="mt-2 text-[11px] text-slate-500">Loading your place links…</p>
+                ) : placeConnections.length ? (
+                  <ul className="mt-2 divide-y divide-slate-100">
+                    {placeConnections.map((place) => (
+                      <li key={place.connectionId} className="flex items-center justify-between gap-3 py-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-medium text-slate-800">{place.name}, {place.country}</p>
+                          <p className="truncate text-[10px] text-slate-500">{place.humanLabel || place.connectionType}</p>
+                        </div>
+                        <select
+                          aria-label={`Sharing for ${place.name}, ${place.country}`}
+                          value={place.visibility}
+                          disabled={savingPlaceConnectionId === place.connectionId}
+                          onChange={(event) => void handlePlaceVisibilityChange(place, event.target.value as VisibilitySetting)}
+                          className="shrink-0 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-[11px] disabled:opacity-60"
+                        >
+                          <option value="private">Private</option>
+                          <option value="shared">Shared with family</option>
+                          <option value="public">Public</option>
+                        </select>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-[11px] text-slate-500">You have no connected place records.</p>
+                )}
+              </div>
+
+              <div className="border-t border-slate-200 pt-4">
+                <h5 className="text-xs font-bold text-slate-800">Community connections</h5>
+                <p className="mt-0.5 text-[11px] text-slate-500">These links are private to your account in the current app. Community sharing is not enabled yet.</p>
+                {privacyRecordsLoading ? (
+                  <p className="mt-2 text-[11px] text-slate-500">Loading your community links…</p>
+                ) : communityConnections.length ? (
+                  <ul className="mt-2 space-y-1.5">
+                    {communityConnections.map((community) => (
+                      <li key={community.connectionId} className="flex items-center justify-between gap-3 text-xs">
+                        <span className="truncate text-slate-700">{community.name}</span>
+                        <span className="shrink-0 text-[10px] font-medium text-slate-500">Private</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="mt-2 text-[11px] text-slate-500">You have no connected community records.</p>
+                )}
+              </div>
+              {privacyRecordsError && <p className="text-xs text-red-600" role="alert">{privacyRecordsError}</p>}
             </div>
           )}
 

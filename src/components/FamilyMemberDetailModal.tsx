@@ -7,13 +7,11 @@ import {
   Copy,
   Check,
   Trash2,
-  Lock,
-  Eye,
   AlertCircle,
   CheckCircle2,
   Share2,
 } from 'lucide-react';
-import type { FamilyTreeNode, RelationshipType, VisibilitySetting } from '../types.ts';
+import type { FamilyTreeNode, RelationshipType } from '../types.ts';
 import { familyGenderOptions, getRelationshipLabel, getRelationshipOptions } from '../lib/family-relationships.ts';
 
 interface FamilyMemberDetailModalProps {
@@ -49,11 +47,9 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
     (node.relationshipType as RelationshipType) || 'relative'
   );
   const canEditGender = !node.userId;
+  const canEditNotes = !node.isLiving || (Boolean(node.userId) && node.visibility !== 'private');
   const [editGender, setEditGender] = useState(node.gender || 'unspecified');
   const [editNotes, setEditNotes] = useState(node.notes || '');
-  const [editVisibility, setEditVisibility] = useState<VisibilitySetting>(
-    (node.visibility as VisibilitySetting) || 'private'
-  );
   const [savingEdit, setSavingEdit] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
@@ -116,8 +112,7 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
         body: JSON.stringify({
           relationshipType: editRelType,
           ...(canEditGender ? { gender: editGender } : {}),
-          notes: editNotes.trim() || null,
-          visibility: editVisibility,
+          ...(canEditNotes ? { notes: editNotes.trim() || null } : {}),
         }),
       });
 
@@ -360,7 +355,7 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
                     </select>
                   </div>
 
-                  <div>
+                  {canEditNotes && <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1">Notes</label>
                     <input
                       type="text"
@@ -368,20 +363,7 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
                       onChange={(e) => setEditNotes(e.target.value)}
                       className="w-full px-3 py-1.5 text-xs border rounded-lg bg-white"
                     />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">Visibility</label>
-                    <select
-                      value={editVisibility}
-                      onChange={(e) => setEditVisibility(e.target.value as VisibilitySetting)}
-                      className="w-full px-3 py-1.5 text-xs border rounded-lg bg-white"
-                    >
-                      <option value="private">Private (Only you)</option>
-                      <option value="shared">Shared (Verified family)</option>
-                      <option value="public">Public</option>
-                    </select>
-                  </div>
+                  </div>}
 
                   {editError && (
                     <p className="text-xs text-red-600">{editError}</p>
@@ -413,7 +395,7 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
                     onClick={() => setIsEditing(true)}
                     className="text-sky-700 font-semibold hover:underline"
                   >
-                    Edit relationship type or notes
+                    {canEditNotes ? 'Edit relationship type or notes' : 'Edit relationship details'}
                   </button>
                   <button
                     onClick={() => setConfirmDisconnect(true)}

@@ -189,6 +189,14 @@ async function mergeClaimedPersonIntoAccount(
   await tx.update(personPlaces).set({ personId: invitedPerson.id }).where(eq(personPlaces.personId, accountPerson.id));
   await tx.update(personCommunities).set({ personId: invitedPerson.id }).where(eq(personCommunities.personId, accountPerson.id));
   await tx.update(familyMembers).set({ personId: invitedPerson.id }).where(eq(familyMembers.personId, accountPerson.id));
+  // Transfer details previously entered by relatives to the claimant and reset
+  // their sharing choices so the claimant can review them before sharing.
+  await tx.update(personPlaces)
+    .set({ createdByUserId: userId, visibility: 'private' })
+    .where(and(eq(personPlaces.personId, invitedPerson.id), ne(personPlaces.createdByUserId, userId)));
+  await tx.update(personCommunities)
+    .set({ createdByUserId: userId, visibility: 'private' })
+    .where(and(eq(personCommunities.personId, invitedPerson.id), ne(personCommunities.createdByUserId, userId)));
   await tx.update(people).set({
     userId,
     firstName: accountPerson.firstName,
@@ -278,7 +286,10 @@ export async function getUserOverview(userId: number) {
       .from(activityEvents)
       .where(and(
         eq(activityEvents.userId, userId),
-        eq(activityEvents.eventType, 'PROFILE_SHARING_PREFERENCE_UPDATED'),
+        or(
+          eq(activityEvents.eventType, 'PROFILE_SHARING_PREFERENCE_UPDATED'),
+          eq(activityEvents.eventType, 'PLACE_SHARING_PREFERENCE_UPDATED'),
+        ),
       ))
       .orderBy(desc(activityEvents.createdAt))
       .limit(5);
@@ -336,6 +347,7 @@ export async function getUserOverview(userId: number) {
           id: event.id,
           previous: metadata.previous || 'private',
           selected: metadata.selected || 'private',
+          scope: metadata.scope === 'place_connection' ? 'Place' : 'Profile',
           createdAt: event.createdAt.toISOString(),
         };
       }),
@@ -509,7 +521,10 @@ export async function addPlaceConnection(
     const defaultPerson = await ensureUserPerson(userId, '');
     const targetPersonId = data.forPersonId || defaultPerson.id;
     if (targetPersonId !== defaultPerson.id) {
-      await requireManageablePerson(userId, targetPersonId);
+      const targetPerson = await requireManageablePerson(userId, targetPersonId);
+      if (targetPerson.isLiving && targetPerson.userId === null) {
+        throw new Error('Add personal place details after this living relative claims their family record.');
+      }
     }
 
     // Check if matching place exists or insert new place
@@ -653,10 +668,17 @@ export async function updatePlaceConnection(
   try {
     return await db.transaction(async (tx) => {
       const [connection] = await tx
-        .select({ id: personPlaces.id, placeId: personPlaces.placeId })
+        .select({ id: personPlaces.id, placeId: personPlaces.placeId, personId: personPlaces.personId, visibility: personPlaces.visibility })
         .from(personPlaces)
         .where(and(eq(personPlaces.id, connectionId), eq(personPlaces.createdByUserId, userId)));
       if (!connection) throw new Error('Place connection not found or permission denied');
+
+      const [owner] = await tx.select({ userId: people.userId, isLiving: people.isLiving })
+        .from(people)
+        .where(eq(people.id, connection.personId));
+      if (owner?.isLiving && owner.userId === null) {
+        throw new Error('Personal place details can be edited after this living relative claims their record.');
+      }
 
       const [referenceCount] = await tx
         .select({ count: sql<number>`count(*)` })
@@ -689,6 +711,21 @@ export async function updatePlaceConnection(
         notes: data.notes?.trim() || null,
         visibility: data.visibility || 'private',
       }).where(eq(personPlaces.id, connectionId));
+
+      if (data.visibility && data.visibility !== connection.visibility) {
+        await tx.insert(activityEvents).values({
+          eventType: 'PLACE_SHARING_PREFERENCE_UPDATED',
+          summary: 'Place sharing preference changed',
+          userId,
+          targetType: 'place_connection',
+          targetId: connection.id,
+          metadata: JSON.stringify({
+            scope: 'place_connection',
+            previous: connection.visibility,
+            selected: data.visibility,
+          }),
+        });
+      }
 
       await recordActivityEvent(
         'PLACE_UPDATED',
@@ -733,7 +770,7 @@ export async function getUserCommunities(userId: number) {
       .where(eq(personCommunities.personId, person.id))
       .orderBy(desc(personCommunities.createdAt));
 
-    return results;
+    return results.map((community) => ({ ...community, visibility: 'private' as const }));
   } catch (error) {
     console.error('Database error in getUserCommunities:', error);
     throw new Error('Failed to load communities.', { cause: error });
@@ -773,7 +810,7 @@ export async function addCommunityConnection(
           communityType: data.communityType || 'hometown',
           description: data.description || null,
           associatedPlaceId: data.associatedPlaceId || null,
-          visibility: data.visibility || 'private',
+          visibility: 'private',
           createdByUserId: userId,
         })
         .returning();
@@ -825,7 +862,7 @@ export async function addCommunityConnection(
         connectionType: data.connectionType,
         humanLabel,
         notes: data.notes || null,
-        visibility: data.visibility || 'private',
+        visibility: 'private',
         createdByUserId: userId,
       })
       .returning();
@@ -1156,7 +1193,7 @@ export async function getUserFamily(userId: number) {
           isLiving: otherPerson.isLiving,
           relationshipType: displayedType,
           inverseRelationshipType: rel.inverseRelationshipType,
-          notes: hasClaimedLivingRecord ? rel.notes : null,
+          notes: canViewSharedDetails ? rel.notes : null,
           placesCount: hasClaimedLivingRecord ? Number(placeCountRes[0]?.count || 0) : 0,
           userId: otherPerson.userId,
           hasAccount: Boolean(otherPerson.userId),
@@ -1210,6 +1247,7 @@ export async function getUserFamilyTree(userId: number) {
       generation: 0,
       generationLabel: 'You',
       isSelf: true,
+      isLiving: userPerson.isLiving,
       hasAccount: true,
       userId: userId,
       userEmail: currentUser?.email || null,
@@ -1298,6 +1336,7 @@ export async function getUserFamilyTree(userId: number) {
         generation,
         generationLabel,
         isSelf: false,
+        isLiving: member.isLiving,
         hasAccount: Boolean(member.hasAccount),
         userId: member.userId,
         userEmail: member.userEmail,
@@ -1588,6 +1627,14 @@ export async function updateFamilyRelationship(
       throw new Error('Relationship not found or permission denied');
     }
 
+    const userPerson = await ensureUserPerson(userId, '');
+    const relativePersonId = existing.personAId === userPerson.id ? existing.personBId : existing.personAId;
+    const [relative] = await db.select().from(people).where(eq(people.id, relativePersonId));
+    if (!relative) throw new Error('Family member record not found.');
+    if (data.notes?.trim() && relative.isLiving && relative.userId === null) {
+      throw new Error('Relationship notes can be added after this living relative claims their family record.');
+    }
+
     const updates: any = {};
     if (data.notes !== undefined) updates.notes = data.notes;
     if (data.visibility !== undefined) updates.visibility = data.visibility;
@@ -1597,9 +1644,6 @@ export async function updateFamilyRelationship(
     }
 
     if (data.gender !== undefined) {
-      const userPerson = await ensureUserPerson(userId, '');
-      const relativePersonId = existing.personAId === userPerson.id ? existing.personBId : existing.personAId;
-      const [relative] = await db.select().from(people).where(eq(people.id, relativePersonId));
       if (!relative || relative.userId !== null || relative.createdByUserId !== userId) {
         throw new Error('Only an unclaimed family profile you created can have its gender changed here.');
       }
