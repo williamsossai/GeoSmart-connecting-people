@@ -7,6 +7,9 @@ import {
   personRelationships,
   families,
   familyMembers,
+  familyGroupInvitations,
+  familyGroupPosts,
+  familyGroupComments,
   places,
   personPlaces,
   communities,
@@ -1216,6 +1219,334 @@ export async function getUserFamily(userId: number) {
   }
 }
 
+export async function getUserFamilyGroups(userId: number) {
+  const groups = await db.selectDistinct({
+    id: families.id,
+    name: families.name,
+    description: families.description,
+    createdByUserId: families.createdByUserId,
+    createdAt: families.createdAt,
+  }).from(families)
+    .leftJoin(familyGroupInvitations, and(
+      eq(familyGroupInvitations.groupId, families.id),
+      eq(familyGroupInvitations.inviteeUserId, userId),
+      eq(familyGroupInvitations.status, 'accepted'),
+    ))
+    .where(or(eq(families.createdByUserId, userId), eq(familyGroupInvitations.inviteeUserId, userId)))
+    .orderBy(desc(families.createdAt));
+
+  return Promise.all(groups.map(async (group) => {
+    const isOwner = group.createdByUserId === userId;
+    const ownerRows = await db.select({ id: users.id, displayName: users.displayName, createdAt: families.createdAt })
+      .from(families).innerJoin(users, eq(families.createdByUserId, users.id))
+      .where(eq(families.id, group.id));
+    const inviteRows = await db.select({
+      invitationId: familyGroupInvitations.id,
+      status: familyGroupInvitations.status,
+      relationshipType: familyGroupInvitations.relationshipType,
+      invitedAt: familyGroupInvitations.createdAt,
+      acceptedAt: familyGroupInvitations.acceptedAt,
+      userId: users.id,
+      displayName: users.displayName,
+      firstName: people.firstName,
+      lastName: people.lastName,
+      personId: people.id,
+    }).from(familyGroupInvitations)
+      .innerJoin(users, eq(familyGroupInvitations.inviteeUserId, users.id))
+      .innerJoin(people, eq(familyGroupInvitations.personId, people.id))
+      .where(and(
+        eq(familyGroupInvitations.groupId, group.id),
+        or(
+          eq(familyGroupInvitations.status, 'accepted'),
+          ...(isOwner ? [and(eq(familyGroupInvitations.status, 'pending'), gt(familyGroupInvitations.expiresAt, new Date()))] : []),
+        ),
+      ));
+    const owner = ownerRows[0];
+    const members = [
+      ...(owner ? [{ userId: owner.id, name: owner.displayName || 'Group organiser', personId: null, relationshipType: 'self', joinedAt: owner.createdAt.toISOString(), status: 'accepted' as const, isOrganizer: true, isCurrentUser: owner.id === userId }] : []),
+      ...inviteRows.map((invite) => ({
+        userId: invite.userId,
+        name: invite.displayName || `${invite.firstName} ${invite.lastName}`.trim() || 'Family member',
+        personId: invite.personId,
+        relationshipType: invite.relationshipType,
+        joinedAt: (invite.acceptedAt || invite.invitedAt).toISOString(),
+        status: invite.status as 'pending' | 'accepted',
+        isOrganizer: false,
+        isCurrentUser: invite.userId === userId,
+      })),
+    ];
+    return {
+      id: group.id,
+      name: group.name,
+      description: group.description,
+      createdAt: group.createdAt.toISOString(),
+      isOwner,
+      members,
+    };
+  }));
+}
+
+export async function createUserFamilyGroup(userId: number, input: { name: string; description?: string | null; personIds: number[] }) {
+  const name = input.name.trim();
+  if (!name || name.length > 100) throw new Error('Enter a group name up to 100 characters.');
+  const description = input.description?.trim() || null;
+  if (description && description.length > 1000) throw new Error('Group description must be 1,000 characters or fewer.');
+
+  await ensureUserPerson(userId, '');
+  const family = await getUserFamily(userId);
+  const familyByPersonId = new Map(family.map((member) => [member.personId, member]));
+  const selectedIds = [...new Set(input.personIds)];
+  if (selectedIds.length === 0) throw new Error('Choose at least one family member to invite.');
+  if (selectedIds.some((personId) => !familyByPersonId.has(personId))) {
+    throw new Error('Groups can invite only people already connected to your family.');
+  }
+  const selectedMembers = selectedIds.map((personId) => familyByPersonId.get(personId)!);
+  if (selectedMembers.some((member) => !member.userId || member.userId === userId)) {
+    throw new Error('Every group participant needs a GeoSmart account. Invite relatives to GeoSmart first, then add them to a group.');
+  }
+
+  const group = await db.transaction(async (tx) => {
+    const [created] = await tx.insert(families).values({
+      name,
+      description,
+      visibility: 'private',
+      createdByUserId: userId,
+    }).returning({ id: families.id, name: families.name, description: families.description, createdAt: families.createdAt });
+
+    await tx.insert(familyGroupInvitations).values(selectedMembers.map((member) => ({
+      groupId: created.id,
+      inviterUserId: userId,
+      inviteeUserId: member.userId!,
+      personId: member.personId,
+      relationshipType: member.relationshipType,
+      status: 'pending',
+      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+    })));
+    return created;
+  });
+
+  await recordActivityEvent('FAMILY_GROUP_CREATED', `Created family group: ${name}`, userId, 'family_group', group.id, { invitationCount: selectedIds.length });
+  return { id: group.id };
+}
+
+export async function updateUserFamilyGroup(userId: number, groupId: number, input: { name: string; description?: string | null }) {
+  const name = input.name.trim();
+  const description = input.description?.trim() || null;
+  if (!name || name.length > 100) throw new Error('Enter a group name up to 100 characters.');
+  if (description && description.length > 1000) throw new Error('Group description must be 1,000 characters or fewer.');
+  const [updated] = await db.update(families).set({ name, description })
+    .where(and(eq(families.id, groupId), eq(families.createdByUserId, userId)))
+    .returning({ id: families.id, name: families.name });
+  if (!updated) throw new Error('Only the group organiser can rename this group.');
+  await recordActivityEvent('FAMILY_GROUP_UPDATED', `Updated family group: ${name}`, userId, 'family_group', groupId);
+  return { success: true, name: updated.name };
+}
+
+export async function deleteUserFamilyGroup(userId: number, groupId: number) {
+  const [deleted] = await db.delete(families).where(and(
+    eq(families.id, groupId),
+    eq(families.createdByUserId, userId),
+  )).returning({ id: families.id, name: families.name });
+  if (!deleted) throw new Error('Group not found or permission denied.');
+  await recordActivityEvent('FAMILY_GROUP_DELETED', `Deleted family group: ${deleted.name}`, userId, 'family_group', deleted.id);
+  return { success: true };
+}
+
+export async function inviteToFamilyGroup(userId: number, groupId: number, personId: number) {
+  const [group] = await db.select({ id: families.id, name: families.name })
+    .from(families)
+    .where(and(eq(families.id, groupId), eq(families.createdByUserId, userId)));
+  if (!group) throw new Error('Only the group organiser can invite members.');
+  const family = await getUserFamily(userId);
+  const person = family.find((member) => member.personId === personId);
+  if (!person?.userId || person.userId === userId) throw new Error('Choose a connected relative with a GeoSmart account.');
+
+  const [existing] = await db.select().from(familyGroupInvitations)
+    .where(and(
+      eq(familyGroupInvitations.groupId, groupId),
+      eq(familyGroupInvitations.inviteeUserId, person.userId),
+    ))
+    .orderBy(desc(familyGroupInvitations.createdAt))
+    .limit(1);
+  if (existing?.status === 'accepted') throw new Error('This person is already a member of the group.');
+  if (existing?.status === 'pending' && existing.expiresAt > new Date()) throw new Error('An invitation is already pending for this person.');
+
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  if (existing) {
+    await db.update(familyGroupInvitations).set({
+      inviterUserId: userId,
+      personId,
+      relationshipType: person.relationshipType,
+      status: 'pending',
+      expiresAt,
+      createdAt: new Date(),
+      acceptedAt: null,
+    }).where(eq(familyGroupInvitations.id, existing.id));
+  } else {
+    await db.insert(familyGroupInvitations).values({
+      groupId,
+      inviterUserId: userId,
+      inviteeUserId: person.userId,
+      personId,
+      relationshipType: person.relationshipType,
+      status: 'pending',
+      expiresAt,
+    });
+  }
+  await recordActivityEvent('FAMILY_GROUP_INVITATION_SENT', `Invited a relative to ${group.name}`, userId, 'family_group', groupId);
+  return { success: true };
+}
+
+export async function getIncomingFamilyGroupInvitations(userId: number) {
+  const invitations = await db.select({
+    id: familyGroupInvitations.id,
+    groupId: families.id,
+    groupName: families.name,
+    groupDescription: families.description,
+    inviterUserId: users.id,
+    inviterName: users.displayName,
+    createdAt: familyGroupInvitations.createdAt,
+    expiresAt: familyGroupInvitations.expiresAt,
+  }).from(familyGroupInvitations)
+    .innerJoin(families, eq(familyGroupInvitations.groupId, families.id))
+    .innerJoin(users, eq(familyGroupInvitations.inviterUserId, users.id))
+    .where(and(
+      eq(familyGroupInvitations.inviteeUserId, userId),
+      eq(familyGroupInvitations.status, 'pending'),
+      gt(familyGroupInvitations.expiresAt, new Date()),
+    ))
+    .orderBy(desc(familyGroupInvitations.createdAt));
+  return invitations.map((invitation) => ({
+    ...invitation,
+    inviterName: invitation.inviterName || 'A family member',
+    createdAt: invitation.createdAt.toISOString(),
+    expiresAt: invitation.expiresAt.toISOString(),
+  }));
+}
+
+export async function respondToFamilyGroupInvitation(userId: number, invitationId: number, accept: boolean) {
+  const [invitation] = await db.select({ id: familyGroupInvitations.id, groupId: familyGroupInvitations.groupId })
+    .from(familyGroupInvitations)
+    .where(and(
+      eq(familyGroupInvitations.id, invitationId),
+      eq(familyGroupInvitations.inviteeUserId, userId),
+      eq(familyGroupInvitations.status, 'pending'),
+      gt(familyGroupInvitations.expiresAt, new Date()),
+    ));
+  if (!invitation) throw new Error('Invitation is no longer available.');
+  const now = new Date();
+  await db.update(familyGroupInvitations)
+    .set({ status: accept ? 'accepted' : 'declined', acceptedAt: accept ? now : null })
+    .where(eq(familyGroupInvitations.id, invitationId));
+  await recordActivityEvent(
+    accept ? 'FAMILY_GROUP_INVITATION_ACCEPTED' : 'FAMILY_GROUP_INVITATION_DECLINED',
+    accept ? 'Joined a family group' : 'Declined a family group invitation',
+    userId,
+    'family_group',
+    invitation.groupId,
+  );
+  return { success: true, accepted: accept };
+}
+
+export async function removeFamilyGroupMember(actorUserId: number, groupId: number, targetUserId: number) {
+  const [group] = await db.select({ id: families.id, name: families.name, createdByUserId: families.createdByUserId })
+    .from(families).where(eq(families.id, groupId));
+  if (!group) throw new Error('Family group not found.');
+  if (targetUserId === group.createdByUserId) throw new Error('The organiser cannot leave this group. Delete the group if you no longer want to run it.');
+  const isOrganizer = actorUserId === group.createdByUserId;
+  if (!isOrganizer && actorUserId !== targetUserId) throw new Error('Only the organiser can remove another member.');
+  const [membership] = await db.select({ id: familyGroupInvitations.id, status: familyGroupInvitations.status })
+    .from(familyGroupInvitations)
+    .where(and(
+      eq(familyGroupInvitations.groupId, groupId),
+      eq(familyGroupInvitations.inviteeUserId, targetUserId),
+      inArray(familyGroupInvitations.status, ['pending', 'accepted']),
+    ))
+    .orderBy(desc(familyGroupInvitations.createdAt))
+    .limit(1);
+  if (!membership) throw new Error('This person is not an active group member or invitee.');
+  await db.update(familyGroupInvitations).set({ status: 'revoked' }).where(eq(familyGroupInvitations.id, membership.id));
+  await recordActivityEvent(
+    isOrganizer ? 'FAMILY_GROUP_MEMBER_REMOVED' : 'FAMILY_GROUP_MEMBER_LEFT',
+    isOrganizer ? 'Removed a member from a family group' : 'Left a family group',
+    actorUserId,
+    'family_group',
+    groupId,
+    { targetUserId },
+  );
+  return { success: true, groupName: group.name };
+}
+
+async function requireFamilyGroupMember(userId: number, groupId: number) {
+  const [owned] = await db.select({ id: families.id }).from(families)
+    .where(and(eq(families.id, groupId), eq(families.createdByUserId, userId)));
+  if (owned) return;
+  const [membership] = await db.select({ id: familyGroupInvitations.id }).from(familyGroupInvitations)
+    .where(and(
+      eq(familyGroupInvitations.groupId, groupId),
+      eq(familyGroupInvitations.inviteeUserId, userId),
+      eq(familyGroupInvitations.status, 'accepted'),
+    ));
+  if (!membership) throw new Error('You are not a member of this family group.');
+}
+
+export async function getFamilyGroupPosts(userId: number, groupId: number) {
+  await requireFamilyGroupMember(userId, groupId);
+  const posts = await db.select({
+    id: familyGroupPosts.id,
+    body: familyGroupPosts.body,
+    createdAt: familyGroupPosts.createdAt,
+    authorUserId: users.id,
+    authorName: users.displayName,
+  }).from(familyGroupPosts)
+    .innerJoin(users, eq(familyGroupPosts.authorUserId, users.id))
+    .where(eq(familyGroupPosts.groupId, groupId))
+    .orderBy(desc(familyGroupPosts.createdAt));
+  if (!posts.length) return [];
+  const comments = await db.select({
+    id: familyGroupComments.id,
+    postId: familyGroupComments.postId,
+    body: familyGroupComments.body,
+    createdAt: familyGroupComments.createdAt,
+    authorUserId: users.id,
+    authorName: users.displayName,
+  }).from(familyGroupComments)
+    .innerJoin(users, eq(familyGroupComments.authorUserId, users.id))
+    .where(inArray(familyGroupComments.postId, posts.map((post) => post.id)))
+    .orderBy(familyGroupComments.createdAt);
+  return posts.map((post) => ({
+    ...post,
+    authorName: post.authorName || 'Group member',
+    createdAt: post.createdAt.toISOString(),
+    comments: comments.filter((comment) => comment.postId === post.id).map((comment) => ({
+      ...comment,
+      authorName: comment.authorName || 'Group member',
+      createdAt: comment.createdAt.toISOString(),
+    })),
+  }));
+}
+
+export async function createFamilyGroupPost(userId: number, groupId: number, body: string) {
+  await requireFamilyGroupMember(userId, groupId);
+  const content = body.trim();
+  if (!content || content.length > 5000) throw new Error('Write a post up to 5,000 characters.');
+  const [post] = await db.insert(familyGroupPosts).values({ groupId, authorUserId: userId, body: content }).returning({ id: familyGroupPosts.id });
+  await recordActivityEvent('FAMILY_GROUP_POST_CREATED', 'Posted in a family group', userId, 'family_group_post', post.id, { groupId });
+  return { id: post.id };
+}
+
+export async function createFamilyGroupComment(userId: number, groupId: number, postId: number, body: string) {
+  await requireFamilyGroupMember(userId, groupId);
+  const [post] = await db.select({ id: familyGroupPosts.id }).from(familyGroupPosts)
+    .where(and(eq(familyGroupPosts.id, postId), eq(familyGroupPosts.groupId, groupId)));
+  if (!post) throw new Error('Post not found in this group.');
+  const content = body.trim();
+  if (!content || content.length > 2000) throw new Error('Write a reply up to 2,000 characters.');
+  const [comment] = await db.insert(familyGroupComments).values({ postId, authorUserId: userId, body: content }).returning({ id: familyGroupComments.id });
+  await recordActivityEvent('FAMILY_GROUP_COMMENT_CREATED', 'Replied to a family group post', userId, 'family_group_post', post.id, { groupId });
+  return { id: comment.id };
+}
+
 export async function getUserFamilyTree(userId: number) {
   try {
     const userPerson = await ensureUserPerson(userId, '');
@@ -1915,6 +2246,13 @@ export async function getFamilyInvitationNotificationState(userId: number, verif
       eq(familyInvitations.status, 'pending'),
       sql`${familyInvitations.expiresAt} > now()`,
     ));
+  const [groupPending] = await db.select({ count: sql<number>`count(*)` })
+    .from(familyGroupInvitations)
+    .where(and(
+      eq(familyGroupInvitations.inviteeUserId, userId),
+      eq(familyGroupInvitations.status, 'pending'),
+      gt(familyGroupInvitations.expiresAt, new Date()),
+    ));
 
   const sentClaimedActivity = and(
     eq(familyInvitations.inviterUserId, userId),
@@ -1930,13 +2268,25 @@ export async function getFamilyInvitationNotificationState(userId: number, verif
         sql`${familyInvitations.expiresAt} > now()`,
       )
     : undefined;
+  const receivedGroupInviteActivity = and(
+    eq(familyGroupInvitations.inviteeUserId, userId),
+    eq(familyGroupInvitations.status, 'pending'),
+    gt(familyGroupInvitations.createdAt, state.activityReadAt),
+    gt(familyGroupInvitations.expiresAt, new Date()),
+  );
   const [unread] = await db.select({ count: sql<number>`count(*)` })
     .from(familyInvitations)
-    .where(receivedInviteActivity ? or(sentClaimedActivity, receivedInviteActivity) : sentClaimedActivity);
+    .where(receivedInviteActivity
+      ? or(sentClaimedActivity, receivedInviteActivity)
+      : sentClaimedActivity);
+  const [groupUnread] = await db.select({ count: sql<number>`count(*)` })
+    .from(familyGroupInvitations)
+    .where(receivedGroupInviteActivity);
 
   return {
     pendingCount: Number(pending?.count || 0),
-    hasUnreadActivity: Number(unread?.count || 0) > 0,
+    groupsPendingCount: Number(groupPending?.count || 0),
+    hasUnreadActivity: Number(unread?.count || 0) > 0 || Number(groupUnread?.count || 0) > 0,
     alertsEnabled: state.alertsEnabled,
   };
 }
@@ -2264,6 +2614,35 @@ export async function createFamilyStory(userId: number, input: {
     { visibility: input.visibility, consentVersion: input.consentVersion },
   );
   return { id: story.id };
+}
+
+export async function updateFamilyStorySharing(userId: number, storyId: number, visibility: 'private' | 'family') {
+  const [story] = await db.select({ id: familyStories.id, visibility: familyStories.visibility })
+    .from(familyStories)
+    .where(and(eq(familyStories.id, storyId), eq(familyStories.ownerUserId, userId)));
+  if (!story) throw new Error('Story not found or permission denied.');
+
+  await db.update(familyStories)
+    .set({
+      visibility,
+      ...(visibility === 'family' ? {
+        consentVersion: 'family-story-consent-v1',
+        consentConfirmedAt: new Date(),
+      } : {}),
+    })
+    .where(eq(familyStories.id, storyId));
+
+  if (story.visibility !== visibility) {
+    await recordActivityEvent(
+      'FAMILY_STORY_SHARING_UPDATED',
+      visibility === 'family' ? 'Shared a family story with direct connections' : 'Made a family story private',
+      userId,
+      'family_story',
+      storyId,
+      { previous: story.visibility, selected: visibility },
+    );
+  }
+  return { success: true, visibility };
 }
 
 export async function getFamilyStoryStoragePath(userId: number, storyId: number) {

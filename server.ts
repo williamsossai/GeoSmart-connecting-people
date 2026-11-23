@@ -16,6 +16,17 @@ import {
   addCommunityConnection,
   removeCommunityConnection,
   getUserFamily,
+  getUserFamilyGroups,
+  createUserFamilyGroup,
+  deleteUserFamilyGroup,
+  updateUserFamilyGroup,
+  removeFamilyGroupMember,
+  inviteToFamilyGroup,
+  getIncomingFamilyGroupInvitations,
+  respondToFamilyGroupInvitation,
+  getFamilyGroupPosts,
+  createFamilyGroupPost,
+  createFamilyGroupComment,
   getUserFamilyTree,
   addFamilyMember,
   updateFamilyRelationship,
@@ -31,6 +42,7 @@ import {
   claimDiscoveredPerson,
   getFamilyStories,
   createFamilyStory,
+  updateFamilyStorySharing,
   getFamilyStoryStoragePath,
   deleteFamilyStory,
   exportUserData,
@@ -390,6 +402,143 @@ app.delete('/api/communities/:id', requireAuth, async (req: AuthRequest, res) =>
 });
 
 // 6. Family & Relationships
+app.get('/api/family/groups', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    res.json(await getUserFamilyGroups(req.dbUser!.id));
+  } catch (error) {
+    console.error('Error in GET /api/family/groups:', error);
+    res.status(500).json({ error: 'Could not load your family groups.' });
+  }
+});
+
+app.get('/api/family/groups/invitations', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    res.json(await getIncomingFamilyGroupInvitations(req.dbUser!.id));
+  } catch (error) {
+    console.error('Error in GET /api/family/groups/invitations:', error);
+    res.status(500).json({ error: 'Could not load group invitations.' });
+  }
+});
+
+app.post('/api/family/groups/invitations/:id/respond', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const invitationId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(invitationId) || invitationId < 1 || typeof req.body?.accept !== 'boolean') {
+      return res.status(400).json({ error: 'Provide a valid invitation and response.' });
+    }
+    res.json(await respondToFamilyGroupInvitation(req.dbUser!.id, invitationId, req.body.accept));
+  } catch (error: any) {
+    console.error('Error in POST /api/family/groups/invitations/:id/respond:', error);
+    res.status(400).json({ error: error.message || 'Could not respond to this invitation.' });
+  }
+});
+
+app.post('/api/family/groups/:id/invitations', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const groupId = Number.parseInt(req.params.id, 10);
+    const personId = Number(req.body?.personId);
+    if (!Number.isInteger(groupId) || groupId < 1 || !Number.isInteger(personId) || personId < 1) {
+      return res.status(400).json({ error: 'Choose a valid family member to invite.' });
+    }
+    res.status(201).json(await inviteToFamilyGroup(req.dbUser!.id, groupId, personId));
+  } catch (error: any) {
+    console.error('Error in POST /api/family/groups/:id/invitations:', error);
+    res.status(400).json({ error: error.message || 'Could not invite this family member.' });
+  }
+});
+
+app.post('/api/family/groups', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const { name, description, personIds, inviteConfirmed } = req.body || {};
+    if (typeof name !== 'string' || !Array.isArray(personIds) || personIds.some((id: unknown) => !Number.isInteger(id) || Number(id) < 1)) {
+      return res.status(400).json({ error: 'A group name and valid family member selections are required.' });
+    }
+    if (inviteConfirmed !== true) return res.status(400).json({ error: 'Confirm that the selected account holders should be invited to this group.' });
+    const result = await createUserFamilyGroup(req.dbUser!.id, { name, description, personIds });
+    res.status(201).json(result);
+  } catch (error: any) {
+    console.error('Error in POST /api/family/groups:', error);
+    res.status(400).json({ error: error.message || 'Could not create this family group.' });
+  }
+});
+
+app.get('/api/family/groups/:id/posts', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const groupId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(groupId) || groupId < 1) return res.status(400).json({ error: 'A valid group is required.' });
+    res.json(await getFamilyGroupPosts(req.dbUser!.id, groupId));
+  } catch (error: any) {
+    console.error('Error in GET /api/family/groups/:id/posts:', error);
+    res.status(403).json({ error: error.message || 'Could not load this group discussion.' });
+  }
+});
+
+app.post('/api/family/groups/:id/posts', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const groupId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(groupId) || groupId < 1 || typeof req.body?.body !== 'string') {
+      return res.status(400).json({ error: 'A valid group and post are required.' });
+    }
+    res.status(201).json(await createFamilyGroupPost(req.dbUser!.id, groupId, req.body.body));
+  } catch (error: any) {
+    console.error('Error in POST /api/family/groups/:id/posts:', error);
+    res.status(403).json({ error: error.message || 'Could not create this post.' });
+  }
+});
+
+app.post('/api/family/groups/:id/posts/:postId/comments', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const groupId = Number.parseInt(req.params.id, 10);
+    const postId = Number.parseInt(req.params.postId, 10);
+    if (!Number.isInteger(groupId) || groupId < 1 || !Number.isInteger(postId) || postId < 1 || typeof req.body?.body !== 'string') {
+      return res.status(400).json({ error: 'A valid group, post, and reply are required.' });
+    }
+    res.status(201).json(await createFamilyGroupComment(req.dbUser!.id, groupId, postId, req.body.body));
+  } catch (error: any) {
+    console.error('Error in POST /api/family/groups/:id/posts/:postId/comments:', error);
+    res.status(403).json({ error: error.message || 'Could not add this reply.' });
+  }
+});
+
+app.delete('/api/family/groups/:id', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const groupId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(groupId) || groupId < 1) return res.status(400).json({ error: 'A valid group is required.' });
+    res.json(await deleteUserFamilyGroup(req.dbUser!.id, groupId));
+  } catch (error: any) {
+    console.error('Error in DELETE /api/family/groups/:id:', error);
+    res.status(404).json({ error: 'Group not found or could not be deleted.' });
+  }
+});
+
+app.patch('/api/family/groups/:id', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const groupId = Number.parseInt(req.params.id, 10);
+    const { name, description } = req.body || {};
+    if (!Number.isInteger(groupId) || groupId < 1 || typeof name !== 'string' || (description != null && typeof description !== 'string')) {
+      return res.status(400).json({ error: 'Provide a valid group name and description.' });
+    }
+    res.json(await updateUserFamilyGroup(req.dbUser!.id, groupId, { name, description }));
+  } catch (error: any) {
+    console.error('Error in PATCH /api/family/groups/:id:', error);
+    res.status(400).json({ error: error.message || 'Could not update this family group.' });
+  }
+});
+
+app.delete('/api/family/groups/:id/members/:userId', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const groupId = Number.parseInt(req.params.id, 10);
+    const targetUserId = Number.parseInt(req.params.userId, 10);
+    if (!Number.isInteger(groupId) || groupId < 1 || !Number.isInteger(targetUserId) || targetUserId < 1) {
+      return res.status(400).json({ error: 'A valid group and member are required.' });
+    }
+    res.json(await removeFamilyGroupMember(req.dbUser!.id, groupId, targetUserId));
+  } catch (error: any) {
+    console.error('Error in DELETE /api/family/groups/:id/members/:userId:', error);
+    res.status(400).json({ error: error.message || 'Could not update group membership.' });
+  }
+});
+
 app.get('/api/family', requireAuth, async (req: AuthRequest, res) => {
   try {
     const family = await getUserFamily(req.dbUser!.id);
@@ -502,6 +651,23 @@ app.get('/api/family/stories/:id/media', requireAuth, async (req: AuthRequest, r
     console.error('Error in GET /api/family/stories/:id/media:', error);
     const status = String(error?.message || '').includes('access') ? 403 : 404;
     res.status(status).json({ error: 'Story not found or you do not have access.' });
+  }
+});
+
+app.patch('/api/family/stories/:id/sharing', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const storyId = Number.parseInt(req.params.id, 10);
+    const visibility = req.body?.visibility;
+    if (!Number.isInteger(storyId) || storyId < 1) return res.status(400).json({ error: 'A valid story is required.' });
+    if (visibility !== 'private' && visibility !== 'family') return res.status(400).json({ error: 'Choose private or direct family sharing.' });
+    if (visibility === 'family' && req.body?.consentConfirmed !== true) {
+      return res.status(400).json({ error: 'Confirm you have permission from living people featured in this story.' });
+    }
+    const result = await updateFamilyStorySharing(req.dbUser!.id, storyId, visibility);
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error in PATCH /api/family/stories/:id/sharing:', error);
+    res.status(404).json({ error: 'Story not found or sharing could not be updated.' });
   }
 });
 

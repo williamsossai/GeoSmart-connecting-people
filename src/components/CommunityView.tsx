@@ -4,21 +4,17 @@ import {
   Compass,
   Plus,
   Trash2,
-  Lock,
-  Share2,
-  Globe,
-  MapPin,
   CheckCircle2,
   AlertCircle,
   Tag,
-  Building2,
 } from 'lucide-react';
-import type { CommunityWithConnection } from '../types.ts';
+import type { CommunityConnectionType, CommunityType, CommunityWithConnection } from '../types.ts';
 
 export const CommunityView: React.FC = () => {
   const { idToken, refreshOverview } = useAuth();
   const [communities, setCommunities] = useState<CommunityWithConnection[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -29,26 +25,32 @@ export const CommunityView: React.FC = () => {
 
   // Form states
   const [name, setName] = useState('');
-  const [communityType, setCommunityType] = useState('hometown');
-  const [connectionType, setConnectionType] = useState('member');
+  const [communityType, setCommunityType] = useState<CommunityType>('hometown');
+  const [connectionType, setConnectionType] = useState<CommunityConnectionType>('member');
   const [humanLabel, setHumanLabel] = useState('');
   const [description, setDescription] = useState('');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const fetchCommunities = async () => {
-    if (!idToken) return;
+    if (!idToken) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    setLoadError(null);
+    setErrorMsg(null);
     try {
       const res = await fetch('/api/communities', {
         headers: { Authorization: `Bearer ${idToken}` },
       });
-      if (res.ok) {
-        const data = await res.json();
-        setCommunities(data);
-      }
-    } catch (err) {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Could not load your communities.');
+      setCommunities(Array.isArray(data) ? data : []);
+    } catch (err: any) {
       console.error('Failed to load communities:', err);
+      setLoadError(err.message || 'Could not load your communities.');
+      setErrorMsg(err.message || 'Could not load your communities.');
     } finally {
       setLoading(false);
     }
@@ -82,14 +84,15 @@ export const CommunityView: React.FC = () => {
         }),
       });
 
-      if (!res.ok) {
-        throw new Error('Failed to connect community');
-      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Failed to connect community.');
 
       await fetchCommunities();
       await refreshOverview();
       setShowAddModal(false);
       setName('');
+      setCommunityType('hometown');
+      setConnectionType('member');
       setDescription('');
       setNotes('');
       setHumanLabel('');
@@ -97,7 +100,7 @@ export const CommunityView: React.FC = () => {
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
       console.error('Error adding community:', err);
-      setErrorMsg('Failed to add community connection.');
+      setErrorMsg(err.message || 'Failed to add community connection.');
     } finally {
       setSubmitting(false);
     }
@@ -163,7 +166,7 @@ export const CommunityView: React.FC = () => {
         </div>
       )}
 
-      {errorMsg && (
+      {errorMsg && !showAddModal && !loadError && (
         <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-xs flex items-center space-x-2">
           <AlertCircle className="w-4 h-4 text-red-600 flex-shrink-0" />
           <span>{errorMsg}</span>
@@ -186,6 +189,12 @@ export const CommunityView: React.FC = () => {
 
         {loading ? (
           <div className="py-12 text-center text-slate-400 text-sm">Loading communities...</div>
+        ) : loadError ? (
+          <div className="py-10 text-center">
+            <p className="text-sm font-medium text-slate-700">Your communities could not be loaded</p>
+            <p className="mt-1 text-xs text-slate-500">{loadError}</p>
+            <button type="button" onClick={() => void fetchCommunities()} className="mt-3 rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-[#05224C] hover:bg-slate-50">Try again</button>
+          </div>
         ) : communities.length === 0 ? (
           <div className="py-12 text-center space-y-3">
             <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
@@ -283,6 +292,12 @@ export const CommunityView: React.FC = () => {
             </div>
 
             <form onSubmit={handleAddCommunity} className="p-6 space-y-4">
+              {errorMsg && (
+                <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{errorMsg}</span>
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                   Community Name
@@ -304,7 +319,7 @@ export const CommunityView: React.FC = () => {
                   </label>
                   <select
                     value={communityType}
-                    onChange={(e) => setCommunityType(e.target.value)}
+                    onChange={(e) => setCommunityType(e.target.value as CommunityType)}
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none bg-white"
                   >
                     <option value="hometown">Hometown Community</option>
@@ -323,15 +338,15 @@ export const CommunityView: React.FC = () => {
                   </label>
                   <select
                     value={connectionType}
-                    onChange={(e) => setConnectionType(e.target.value)}
+                    onChange={(e) => setConnectionType(e.target.value as CommunityConnectionType)}
                     className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none bg-white"
                   >
                     <option value="member">Member</option>
                     <option value="resident">Resident</option>
-                    <option value="origin">Origin</option>
-                    <option value="ancestral">Ancestral</option>
-                    <option value="family">Family</option>
-                    <option value="marriage">Marriage</option>
+                    <option value="origin">Community of origin</option>
+                    <option value="ancestral_connection">Ancestral connection</option>
+                    <option value="family_connection">Family connection</option>
+                    <option value="marriage_connection">Marriage connection</option>
                     <option value="professional">Professional</option>
                     <option value="other">Other</option>
                   </select>
@@ -362,6 +377,21 @@ export const CommunityView: React.FC = () => {
                   placeholder="Brief description of the community..."
                   className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none"
                 />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                  Personal Notes (Optional)
+                </label>
+                <textarea
+                  rows={2}
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  maxLength={1000}
+                  placeholder="Add a private note about your connection..."
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                />
+                <p className="mt-1 text-[10px] text-slate-500">Only you can see these notes.</p>
               </div>
 
               <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">

@@ -92,6 +92,36 @@ export const familyMembers = pgTable('family_members', {
   joinedAt: timestamp('joined_at').defaultNow().notNull(),
 });
 
+export const familyGroupInvitations = pgTable('family_group_invitations', {
+  id: serial('id').primaryKey(),
+  groupId: integer('group_id').references(() => families.id, { onDelete: 'cascade' }).notNull(),
+  inviterUserId: integer('inviter_user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  inviteeUserId: integer('invitee_user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  personId: integer('person_id').references(() => people.id, { onDelete: 'cascade' }).notNull(),
+  relationshipType: text('relationship_type').notNull().default('relative'),
+  status: text('status').notNull().default('pending'), // 'pending' | 'accepted' | 'declined' | 'revoked'
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  acceptedAt: timestamp('accepted_at'),
+});
+
+export const familyGroupPosts = pgTable('family_group_posts', {
+  id: serial('id').primaryKey(),
+  groupId: integer('group_id').references(() => families.id, { onDelete: 'cascade' }).notNull(),
+  authorUserId: integer('author_user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+export const familyGroupComments = pgTable('family_group_comments', {
+  id: serial('id').primaryKey(),
+  postId: integer('post_id').references(() => familyGroupPosts.id, { onDelete: 'cascade' }).notNull(),
+  authorUserId: integer('author_user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+});
+
 // 7. Places (geographic locations)
 export const places = pgTable('places', {
   id: serial('id').primaryKey(),

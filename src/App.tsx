@@ -26,7 +26,7 @@ import { ShieldCheck, Database } from 'lucide-react';
 
 const readLocation = () => {
   let pathname = window.location.pathname.replace(/\/+$/, '') || '/';
-  const knownRoutes = new Set(['/', '/profile', '/family', '/family/tree', '/family/invitations', '/family/stories', '/community', '/place', '/admin']);
+  const knownRoutes = new Set(['/', '/profile', '/family', '/family/tree', '/family/groups', '/family/invitations', '/family/stories', '/community', '/place', '/admin']);
   if (!knownRoutes.has(pathname)) {
     window.history.replaceState(null, '', '/');
     pathname = '/';
