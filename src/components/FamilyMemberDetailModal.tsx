@@ -43,13 +43,27 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
 
-  // Edit relationship states
+  // Edit relationship & relative details states
   const [isEditing, setIsEditing] = useState(false);
+  const [editFirstName, setEditFirstName] = useState(node.firstName || '');
+  const [editLastName, setEditLastName] = useState(node.lastName || '');
+  const [editOtherNames, setEditOtherNames] = useState(node.otherNames || '');
+  const [editIsLiving, setEditIsLiving] = useState(node.isLiving !== false);
+  const [editBirthDate, setEditBirthDate] = useState(node.birthDate || '');
+  const [editDeathDate, setEditDeathDate] = useState(node.deathDate || '');
+  const initialOriginParts = (node.placeOfOrigin || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+  const [editOriginName, setEditOriginName] = useState(initialOriginParts[0] || '');
+  const [editOriginCountry, setEditOriginCountry] = useState(
+    initialOriginParts.length > 1 ? initialOriginParts.slice(1).join(', ') : '',
+  );
   const [editRelType, setEditRelType] = useState<RelationshipType>(
     (node.relationshipType as RelationshipType) || 'relative'
   );
-  const canEditGender = !node.userId;
-  const canEditNotes = !node.isLiving || (Boolean(node.userId) && node.visibility !== 'private');
+  const canEditUnclaimedProfile = !node.userId;
+  const canEditNotes = !editIsLiving || (Boolean(node.userId) && node.visibility !== 'private');
   const [editGender, setEditGender] = useState(node.gender || 'unspecified');
   const [editNotes, setEditNotes] = useState(node.notes || '');
   const [savingEdit, setSavingEdit] = useState(false);
@@ -82,7 +96,7 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
     }
   };
 
-  // Save relationship updates
+  // Save relationship & relative details updates
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     const targetId = node.relationshipId || node.personId;
@@ -93,8 +107,28 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
     try {
       await updateFamilyRelationshipFs(currentUser.uid, targetId, {
         relationshipType: editRelType,
-        ...(canEditGender ? { gender: editGender } : {}),
-        ...(canEditNotes ? { notes: editNotes.trim() || null } : {}),
+        ...(canEditUnclaimedProfile
+          ? {
+              firstName: editFirstName.trim(),
+              lastName: editLastName.trim(),
+              gender: editGender,
+              isLiving: editIsLiving,
+              ...(!editIsLiving
+                ? {
+                    otherNames: editOtherNames.trim() || null,
+                    birthDate: editBirthDate.trim() || null,
+                    deathDate: editDeathDate.trim() || null,
+                    originPlace: {
+                      name: editOriginName.trim(),
+                      country: editOriginCountry.trim(),
+                    },
+                    notes: editNotes.trim() || null,
+                  }
+                : { notes: null }),
+            }
+          : canEditNotes
+          ? { notes: editNotes.trim() || null }
+          : {}),
       });
       setIsEditing(false);
       onUpdated();
@@ -142,14 +176,18 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
         <div className="p-6 overflow-y-auto space-y-6 flex-1 text-sm text-slate-700">
           {/* Identity & Account Status */}
           <div className="p-4 rounded-xl bg-slate-50 border border-slate-200/80 space-y-2">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
-                Account Status
+                Record Status
               </span>
               {node.hasAccount ? (
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 flex items-center space-x-1">
                   <CheckCircle2 className="w-3.5 h-3.5" />
                   <span>Verified GeoSmart Account</span>
+                </span>
+              ) : !node.isLiving ? (
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-slate-200 text-slate-800">
+                  Remembered Relative (Deceased)
                 </span>
               ) : (
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
@@ -164,6 +202,10 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
                   ? `Logged in as ${node.userEmail || 'Active user'}`
                   : `${fullName} has linked their account (${node.userEmail || 'GeoSmart user'}). They share this family branch.`}
               </p>
+            ) : !node.isLiving ? (
+              <p className="text-xs text-slate-500">
+                Memorial family entry managed by you to preserve {node.firstName}&apos;s life dates, geographic roots, and family history.
+              </p>
             ) : (
               <p className="text-xs text-slate-500">
                 This record exists in your family tree. You can invite them or link their existing GeoSmart account to share connections.
@@ -171,10 +213,36 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
             )}
           </div>
 
+          {/* Life & Remembrance Dates */}
+          {!node.isLiving && (node.otherNames || node.birthDate || node.deathDate) && (
+            <div className="p-3.5 rounded-xl bg-white border border-slate-200 space-y-2">
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
+                Life &amp; Identity Details
+              </span>
+              {node.otherNames && (
+                <p className="text-xs text-slate-700">
+                  <span className="font-semibold text-slate-800">Other / Maiden Names:</span> {node.otherNames}
+                </p>
+              )}
+              {(node.birthDate || node.deathDate) && (
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <span className="block text-[11px] font-semibold text-slate-500 uppercase">Born</span>
+                    <span className="text-slate-800 font-medium">{node.birthDate || 'Not recorded'}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[11px] font-semibold text-slate-500 uppercase">Passed</span>
+                    <span className="text-slate-800 font-medium">{node.deathDate || 'Not recorded'}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Place & Geographic Context */}
           <div className="space-y-1.5">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
-              Geographic Roots & Origin
+              Geographic Roots &amp; Origin
             </span>
             <div className="flex items-center space-x-2 text-slate-800 bg-white p-3 rounded-lg border border-slate-200">
               <MapPin className="w-4 h-4 text-sky-600 flex-shrink-0" />
@@ -186,16 +254,16 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
           {node.notes && (
             <div className="space-y-1.5">
               <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider block">
-                Relationship Notes
+                {!node.isLiving ? 'Life Details & Remembrance Notes' : 'Relationship Notes'}
               </span>
-              <p className="p-3 bg-white rounded-lg border border-slate-200 text-xs text-slate-600">
+              <p className="p-3 bg-white rounded-lg border border-slate-200 text-xs text-slate-600 whitespace-pre-line">
                 {node.notes}
               </p>
             </div>
           )}
 
-          {/* Unclaimed Actions: invitation requires the recipient's consent */}
-          {!isSelf && !node.hasAccount && (
+          {/* Unclaimed Living Actions: invitation requires the recipient's consent */}
+          {!isSelf && !node.hasAccount && node.isLiving && (
             <div className="border-t border-slate-200 pt-5 space-y-4">
               <h4 className="text-xs font-bold uppercase tracking-wider text-[#05224C] flex items-center space-x-1.5">
                 <Share2 className="w-3.5 h-3.5" />
@@ -303,20 +371,76 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
                 </div>
               ) : isEditing ? (
                 <form onSubmit={handleSaveEdit} className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                  <h5 className="text-xs font-bold uppercase text-slate-800">Edit Relationship</h5>
+                  <h5 className="text-xs font-bold uppercase text-slate-800">
+                    {canEditUnclaimedProfile ? 'Edit Relative Details' : 'Edit Relationship'}
+                  </h5>
+
+                  {canEditUnclaimedProfile && (
+                    <>
+                      <div>
+                        <span className="block text-xs font-medium text-slate-600 mb-1">Relative Status</span>
+                        <div className="grid grid-cols-2 gap-1.5 rounded-lg border border-slate-200 bg-white p-1">
+                          <button
+                            type="button"
+                            onClick={() => setEditIsLiving(true)}
+                            className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition ${
+                              editIsLiving ? 'bg-[#05224C] text-white' : 'text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            Living
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditIsLiving(false)}
+                            className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition ${
+                              !editIsLiving ? 'bg-[#05224C] text-white' : 'text-slate-600 hover:bg-slate-100'
+                            }`}
+                          >
+                            Deceased (In Memory)
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 mb-1">First Name *</label>
+                          <input
+                            type="text"
+                            required
+                            maxLength={80}
+                            value={editFirstName}
+                            onChange={(e) => setEditFirstName(e.target.value)}
+                            className="w-full px-3 py-1.5 text-xs border rounded-lg bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 mb-1">Last Name *</label>
+                          <input
+                            type="text"
+                            required
+                            maxLength={80}
+                            value={editLastName}
+                            onChange={(e) => setEditLastName(e.target.value)}
+                            className="w-full px-3 py-1.5 text-xs border rounded-lg bg-white"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+
                   <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1">Gender</label>
                     <select
                       value={editGender}
                       onChange={(e) => setEditGender(e.target.value)}
-                      disabled={!canEditGender}
+                      disabled={!canEditUnclaimedProfile}
                       className="w-full rounded-lg border bg-white px-3 py-1.5 text-xs disabled:bg-slate-100 disabled:text-slate-500"
                     >
                       {familyGenderOptions.map((option) => (
                         <option key={option.value} value={option.value}>{option.label}</option>
                       ))}
                     </select>
-                    {!canEditGender && <p className="mt-1 text-[11px] text-slate-500">Only this account holder can change their gender.</p>}
+                    {!canEditUnclaimedProfile && <p className="mt-1 text-[11px] text-slate-500">Only this account holder can change their gender.</p>}
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-slate-600 mb-1">Relationship</label>
@@ -331,15 +455,89 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
                     </select>
                   </div>
 
-                  {canEditNotes && <div>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">Notes</label>
-                    <input
-                      type="text"
-                      value={editNotes}
-                      onChange={(e) => setEditNotes(e.target.value)}
-                      className="w-full px-3 py-1.5 text-xs border rounded-lg bg-white"
-                    />
-                  </div>}
+                  {canEditUnclaimedProfile && !editIsLiving && (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 mb-1">
+                          Middle / Maiden / Other Names
+                        </label>
+                        <input
+                          type="text"
+                          maxLength={120}
+                          value={editOtherNames}
+                          onChange={(e) => setEditOtherNames(e.target.value)}
+                          placeholder="Optional"
+                          className="w-full px-3 py-1.5 text-xs border rounded-lg bg-white"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 mb-1">Birth Year / Date</label>
+                          <input
+                            type="text"
+                            maxLength={32}
+                            value={editBirthDate}
+                            onChange={(e) => setEditBirthDate(e.target.value)}
+                            placeholder="e.g. 1942"
+                            className="w-full px-3 py-1.5 text-xs border rounded-lg bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 mb-1">Passing Year / Date</label>
+                          <input
+                            type="text"
+                            maxLength={32}
+                            value={editDeathDate}
+                            onChange={(e) => setEditDeathDate(e.target.value)}
+                            placeholder="e.g. 2018"
+                            className="w-full px-3 py-1.5 text-xs border rounded-lg bg-white"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 mb-1">Origin Town / City</label>
+                          <input
+                            type="text"
+                            maxLength={120}
+                            value={editOriginName}
+                            onChange={(e) => setEditOriginName(e.target.value)}
+                            placeholder="e.g. Enugu"
+                            className="w-full px-3 py-1.5 text-xs border rounded-lg bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 mb-1">Origin Country</label>
+                          <input
+                            type="text"
+                            maxLength={100}
+                            value={editOriginCountry}
+                            onChange={(e) => setEditOriginCountry(e.target.value)}
+                            placeholder="e.g. Nigeria"
+                            className="w-full px-3 py-1.5 text-xs border rounded-lg bg-white"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {canEditNotes && (
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">
+                        {!editIsLiving ? 'Life Details & Remembrance Notes' : 'Notes'}
+                      </label>
+                      <textarea
+                        rows={3}
+                        maxLength={600}
+                        value={editNotes}
+                        onChange={(e) => setEditNotes(e.target.value)}
+                        placeholder="Life story, resting place, or family memories..."
+                        className="w-full px-3 py-1.5 text-xs border rounded-lg bg-white resize-none"
+                      />
+                    </div>
+                  )}
 
                   {editError && (
                     <p className="text-xs text-red-600">{editError}</p>
@@ -371,7 +569,11 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
                     onClick={() => setIsEditing(true)}
                     className="text-sky-700 font-semibold hover:underline"
                   >
-                    {canEditNotes ? 'Edit relationship type or notes' : 'Edit relationship details'}
+                    {canEditUnclaimedProfile
+                      ? 'Edit details, status, or notes'
+                      : canEditNotes
+                      ? 'Edit relationship type or notes'
+                      : 'Edit relationship details'}
                   </button>
                   <button
                     onClick={() => setConfirmDisconnect(true)}

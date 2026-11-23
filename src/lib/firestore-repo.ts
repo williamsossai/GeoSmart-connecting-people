@@ -32,7 +32,7 @@ import type {
   VisibilitySetting,
 } from '../types.ts';
 
-const BOOTSTRAP_ADMIN_EMAIL = 'ossaiwilliams@gmail.com';
+const BOOTSTRAP_ADMIN_EMAIL = 'alphaonesolutionsltd@gmail.com';
 const SUPPORTED_GENDERS = new Set(['female', 'male', 'non_binary', 'another', 'unspecified']);
 const SUPPORTED_VISIBILITIES = new Set<VisibilitySetting>(['private', 'shared', 'public']);
 const SUPPORTED_RELATIONSHIPS = new Set<RelationshipType>([
@@ -230,6 +230,8 @@ interface FamilyMemberDoc {
   otherNames: string;
   gender: string;
   isLiving: boolean;
+  birthDate?: string;
+  deathDate?: string;
   relationshipType: RelationshipType;
   inverseRelationshipType: RelationshipType;
   notes: string;
@@ -442,6 +444,26 @@ export async function ensureUserDocumentFs(fbUser: User): Promise<UserAccountDoc
         return { ...existing, role: 'admin' };
       } catch (error) {
         handleFirestoreError(error, OperationType.UPDATE, path);
+      }
+    }
+    if (!isBootstrap && existing.role === 'admin') {
+      let hasExplicitAdminDoc = false;
+      try {
+        const adminSnap = await getDoc(doc(db, 'admins', uid));
+        hasExplicitAdminDoc = adminSnap.exists();
+      } catch {
+        hasExplicitAdminDoc = false;
+      }
+      if (!hasExplicitAdminDoc) {
+        try {
+          await updateDoc(doc(db, 'users', uid), {
+            role: 'user',
+            updatedAt: serverTimestamp(),
+          });
+          return { ...existing, role: 'user' };
+        } catch (error) {
+          handleFirestoreError(error, OperationType.UPDATE, path);
+        }
       }
     }
     return existing;
@@ -1020,9 +1042,11 @@ export async function getUserFamilyFs(uid: string): Promise<FamilyMemberWithPers
             : m.gender)
         : null,
       isLiving: m.isLiving,
+      birthDate: canViewSharedDetails ? m.birthDate || null : null,
+      deathDate: !m.isLiving ? m.deathDate || null : null,
       placesCount: sharedProfile
         ? sharedProfile.sharedPlacesCount
-        : !isLinkedAccount && !m.isLiving && m.originPlaceName
+        : !isLinkedAccount && !m.isLiving && (m.originPlaceName || m.originPlaceCountry)
         ? 1
         : 0,
       userId: m.linkedUid ? toNumericId(m.linkedUid) : null,
@@ -1033,7 +1057,7 @@ export async function getUserFamilyFs(uid: string): Promise<FamilyMemberWithPers
       placeOfOrigin: canViewSharedDetails
         ? sharedProfile?.placeOfOriginName
           ? { name: sharedProfile.placeOfOriginName, country: sharedProfile.placeOfOriginCountry }
-          : m.originPlaceName
+          : (m.originPlaceName || m.originPlaceCountry)
           ? { name: m.originPlaceName, country: m.originPlaceCountry }
           : null
         : null,
@@ -1129,10 +1153,10 @@ export async function getUserFamilyTreeFs(uid: string): Promise<FamilyTreeGraph>
     }
 
     const placeStr = member.placeOfOrigin
-      ? `${member.placeOfOrigin.name}, ${member.placeOfOrigin.country}`
+      ? [member.placeOfOrigin.name, member.placeOfOrigin.country].filter(Boolean).join(', ')
       : member.originSummary || null;
 
-    if (member.placeOfOrigin) {
+    if (member.placeOfOrigin && member.placeOfOrigin.name) {
       placeMap.set(`${member.placeOfOrigin.name}-${member.placeOfOrigin.country}`, member.placeOfOrigin);
     }
     if (member.hasAccount) membersWithAccounts++;
@@ -1149,6 +1173,8 @@ export async function getUserFamilyTreeFs(uid: string): Promise<FamilyTreeGraph>
       generationLabel,
       isSelf: false,
       isLiving: member.isLiving,
+      birthDate: member.birthDate || null,
+      deathDate: member.deathDate || null,
       hasAccount: Boolean(member.hasAccount),
       userId: member.userId,
       userEmail: member.userEmail,
@@ -1187,10 +1213,12 @@ export async function addFamilyMemberFs(
     otherNames?: string | null;
     gender?: string | null;
     isLiving?: boolean;
+    birthDate?: string | null;
+    deathDate?: string | null;
     relationshipType: RelationshipType;
     notes?: string | null;
     visibility?: VisibilitySetting;
-    originPlace?: { name: string; country: string };
+    originPlace?: { name?: string | null; country?: string | null };
   },
 ): Promise<{ alreadyConnected?: boolean }> {
   requireVerifiedCurrentUser();
@@ -1226,6 +1254,8 @@ export async function addFamilyMemberFs(
     otherNames: allowDetails ? clamp(data.otherNames, 120) : '',
     gender: safeGender(data.gender),
     isLiving,
+    birthDate: allowDetails ? clamp(data.birthDate, 32) : '',
+    deathDate: allowDetails ? clamp(data.deathDate, 32) : '',
     relationshipType: relType,
     inverseRelationshipType: getInverseRelationship(relType),
     notes: allowDetails ? clamp(data.notes, 600) : '',
@@ -1245,7 +1275,7 @@ export async function addFamilyMemberFs(
   await recordActivityEventFs(
     uid,
     'FAMILY_MEMBER_ADDED',
-    `Added family connection: ${firstName} ${lastName} (${relType})`,
+    `Added ${isLiving ? '' : 'late '}family connection: ${firstName} ${lastName} (${relType})`,
     'person',
   );
   return {};
@@ -1255,9 +1285,16 @@ export async function updateFamilyRelationshipFs(
   uid: string,
   relationshipIdOrPersonId: number,
   data: {
-    relationshipType?: RelationshipType;
+    firstName?: string;
+    lastName?: string;
+    otherNames?: string | null;
     gender?: string | null;
+    isLiving?: boolean;
+    birthDate?: string | null;
+    deathDate?: string | null;
+    relationshipType?: RelationshipType;
     notes?: string | null;
+    originPlace?: { name?: string | null; country?: string | null } | null;
   },
 ): Promise<void> {
   requireVerifiedCurrentUser();
@@ -1265,23 +1302,82 @@ export async function updateFamilyRelationshipFs(
   const target = existing.find((m) => m.numericId === relationshipIdOrPersonId);
   if (!target) throw new Error('Relationship not found.');
 
-  if (data.notes?.trim() && target.isLiving && !target.linkedUid) {
-    throw new Error('Relationship notes can be added after this living relative claims their family record.');
+  if (target.linkedUid) {
+    if (
+      data.firstName !== undefined ||
+      data.lastName !== undefined ||
+      data.otherNames !== undefined ||
+      data.gender !== undefined ||
+      data.isLiving !== undefined ||
+      data.birthDate !== undefined ||
+      data.deathDate !== undefined ||
+      data.originPlace !== undefined
+    ) {
+      throw new Error('Only an unclaimed family profile you created can have those details edited here.');
+    }
   }
-  if (data.gender !== undefined && target.linkedUid) {
-    throw new Error('Only an unclaimed family profile you created can have its gender changed here.');
+
+  const nextIsLiving = data.isLiving !== undefined ? Boolean(data.isLiving) : target.isLiving;
+  if (data.notes?.trim() && nextIsLiving && !target.linkedUid) {
+    throw new Error('Relationship notes can be added after this living relative claims their family record, or when marked as deceased.');
   }
 
   const nextRel = data.relationshipType ? safeRelationship(data.relationshipType) : target.relationshipType;
   const path = `users/${uid}/familyMembers/${target.id}`;
+
+  const updatePayload: Record<string, unknown> = {
+    relationshipType: nextRel,
+    inverseRelationshipType: getInverseRelationship(nextRel),
+    notes:
+      target.linkedUid
+        ? data.notes !== undefined
+          ? clamp(data.notes, 600)
+          : target.notes
+        : nextIsLiving
+        ? ''
+        : data.notes !== undefined
+        ? clamp(data.notes, 600)
+        : target.notes,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (!target.linkedUid) {
+    const nextFirstName = data.firstName !== undefined ? clamp(data.firstName, 80) : target.firstName;
+    const nextLastName = data.lastName !== undefined ? clamp(data.lastName, 80) : target.lastName;
+    if (!nextFirstName || !nextLastName) {
+      throw new Error('First name and last name are required.');
+    }
+    updatePayload.firstName = nextFirstName;
+    updatePayload.lastName = nextLastName;
+    updatePayload.gender = data.gender !== undefined ? safeGender(data.gender) : target.gender;
+    updatePayload.isLiving = nextIsLiving;
+
+    if (nextIsLiving) {
+      updatePayload.otherNames = '';
+      updatePayload.birthDate = '';
+      updatePayload.deathDate = '';
+      updatePayload.originPlaceName = '';
+      updatePayload.originPlaceCountry = '';
+    } else {
+      updatePayload.otherNames =
+        data.otherNames !== undefined ? clamp(data.otherNames, 120) : target.otherNames;
+      updatePayload.birthDate =
+        data.birthDate !== undefined ? clamp(data.birthDate, 32) : target.birthDate || '';
+      updatePayload.deathDate =
+        data.deathDate !== undefined ? clamp(data.deathDate, 32) : target.deathDate || '';
+      updatePayload.originPlaceName =
+        data.originPlace !== undefined
+          ? clamp(data.originPlace?.name, 120)
+          : target.originPlaceName;
+      updatePayload.originPlaceCountry =
+        data.originPlace !== undefined
+          ? clamp(data.originPlace?.country, 100)
+          : target.originPlaceCountry;
+    }
+  }
+
   try {
-    await updateDoc(doc(db, 'users', uid, 'familyMembers', target.id), {
-      relationshipType: nextRel,
-      inverseRelationshipType: getInverseRelationship(nextRel),
-      gender: data.gender !== undefined ? safeGender(data.gender) : target.gender,
-      notes: data.notes !== undefined ? clamp(data.notes, 600) : target.notes,
-      updatedAt: serverTimestamp(),
-    });
+    await updateDoc(doc(db, 'users', uid, 'familyMembers', target.id), updatePayload);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
@@ -1341,6 +1437,9 @@ export async function createFamilyInvitationFs(
   const member = members.find((m) => m.numericId === data.personId);
   if (!member || member.linkedUid) {
     throw new Error('Only an unclaimed family record in your tree can be invited.');
+  }
+  if (!member.isLiving) {
+    throw new Error('Deceased family members cannot be invited to claim an account.');
   }
 
   const userSnap = await getDoc(doc(db, 'users', uid));
@@ -1778,6 +1877,35 @@ export async function getAdminDashboardDataFs(searchQuery: string): Promise<{
     userDocs = snap.docs.map((d) => d.data() as UserAccountDoc);
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'users');
+  }
+
+  if (isBootstrapAdminUser(adminUser)) {
+    for (const u of userDocs) {
+      if (
+        u.uid !== adminUser.uid &&
+        u.role === 'admin' &&
+        u.email.trim().toLowerCase() !== BOOTSTRAP_ADMIN_EMAIL
+      ) {
+        let hasExplicitAdminDoc = false;
+        try {
+          const adminSnap = await getDoc(doc(db, 'admins', u.uid));
+          hasExplicitAdminDoc = adminSnap.exists();
+        } catch {
+          hasExplicitAdminDoc = false;
+        }
+        if (!hasExplicitAdminDoc) {
+          try {
+            await updateDoc(doc(db, 'users', u.uid), {
+              role: 'user',
+              updatedAt: serverTimestamp(),
+            });
+            u.role = 'user';
+          } catch (error) {
+            handleFirestoreError(error, OperationType.UPDATE, `users/${u.uid}`);
+          }
+        }
+      }
+    }
   }
 
   let invitationDocs: FamilyInvitationDoc[] = [];

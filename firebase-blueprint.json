@@ -484,6 +484,16 @@
         "isLiving": {
           "type": "boolean"
         },
+        "birthDate": {
+          "type": "string",
+          "description": "Optional birth year or date (e.g. 1945 or 1945-05-12)",
+          "maxLength": 32
+        },
+        "deathDate": {
+          "type": "string",
+          "description": "Optional passing year or date for deceased relatives",
+          "maxLength": 32
+        },
         "relationshipType": {
           "type": "string",
           "enum": [

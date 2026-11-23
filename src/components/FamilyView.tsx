@@ -122,13 +122,34 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
   // Add Member Form states
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [otherNames, setOtherNames] = useState('');
   const [gender, setGender] = useState('unspecified');
+  const [isLiving, setIsLiving] = useState(true);
+  const [birthDate, setBirthDate] = useState('');
+  const [deathDate, setDeathDate] = useState('');
+  const [originPlaceName, setOriginPlaceName] = useState('');
+  const [originPlaceCountry, setOriginPlaceCountry] = useState('');
+  const [notes, setNotes] = useState('');
   const [relationshipType, setRelationshipType] = useState<RelationshipType>('parent');
   const [submitting, setSubmitting] = useState(false);
 
+  const resetAddForm = () => {
+    setFirstName('');
+    setLastName('');
+    setOtherNames('');
+    setGender('unspecified');
+    setIsLiving(true);
+    setBirthDate('');
+    setDeathDate('');
+    setOriginPlaceName('');
+    setOriginPlaceCountry('');
+    setNotes('');
+    setRelationshipType('parent');
+  };
+
   // Load Tree & Members
-  const loadFamilyData = async () => {
-    if (!currentUser?.uid) return;
+  const loadFamilyData = async (): Promise<FamilyTreeGraph | null> => {
+    if (!currentUser?.uid) return null;
     setLoading(true);
     try {
       const [tData, lData] = await Promise.all([
@@ -137,9 +158,11 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
       ]);
       setTreeData(tData);
       setMembers(lData);
+      return tData;
     } catch (err) {
       console.error('Failed to load family data:', err);
       setErrorMsg('Failed to load family connections.');
+      return null;
     } finally {
       setLoading(false);
     }
@@ -160,17 +183,26 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
       await addFamilyMemberFs(currentUser.uid, {
         firstName: firstName.trim(),
         lastName: lastName.trim(),
+        otherNames: !isLiving ? otherNames.trim() || null : null,
         gender,
+        isLiving,
+        birthDate: !isLiving ? birthDate.trim() || null : null,
+        deathDate: !isLiving ? deathDate.trim() || null : null,
         relationshipType,
+        originPlace:
+          !isLiving && (originPlaceName.trim() || originPlaceCountry.trim())
+            ? {
+                name: originPlaceName.trim(),
+                country: originPlaceCountry.trim(),
+              }
+            : undefined,
+        notes: !isLiving ? notes.trim() || null : null,
       });
 
       await loadFamilyData();
       await refreshOverview();
       setShowAddModal(false);
-      setFirstName('');
-      setLastName('');
-      setGender('unspecified');
-      setRelationshipType('parent');
+      resetAddForm();
       setSuccessMsg('Family member connected successfully.');
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
@@ -913,7 +945,12 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
           onClose={() => setSelectedNode(null)}
           idToken={idToken}
           onUpdated={async () => {
-            await loadFamilyData();
+            const nextTree = await loadFamilyData();
+            if (nextTree) {
+              setSelectedNode((prev) =>
+                prev ? nextTree.nodes.find((n) => n.personId === prev.personId) || prev : null,
+              );
+            }
             await refreshOverview();
             await refreshInvitationNotifications();
           }}
@@ -941,21 +978,57 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
       {/* Add Family Member Modal */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="max-w-md w-full bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
+          <div className="max-w-lg w-full bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
             <div className="bg-[#05224C] px-6 py-4 text-white flex items-center justify-between">
               <div>
                 <h3 className="font-bold text-base">Add Family Connection</h3>
-                <p className="text-xs text-sky-200">Connect a relative to your GeoSmart tree</p>
+                <p className="text-xs text-sky-200">Connect a living or deceased relative to your GeoSmart tree</p>
               </div>
               <button
-                onClick={() => setShowAddModal(false)}
+                type="button"
+                onClick={() => {
+                  setShowAddModal(false);
+                  resetAddForm();
+                }}
                 className="text-slate-300 hover:text-white text-lg font-bold"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleAddMember} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+            <form onSubmit={handleAddMember} className="p-6 space-y-4 max-h-[82vh] overflow-y-auto">
+              <div>
+                <span className="mb-1.5 block text-xs font-semibold uppercase text-slate-700">
+                  Relative Status *
+                </span>
+                <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-slate-100 p-1">
+                  <button
+                    type="button"
+                    aria-pressed={isLiving}
+                    onClick={() => setIsLiving(true)}
+                    className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                      isLiving
+                        ? 'bg-white text-[#05224C] shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Living Relative
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={!isLiving}
+                    onClick={() => setIsLiving(false)}
+                    className={`rounded-lg px-3 py-2 text-xs font-semibold transition ${
+                      !isLiving
+                        ? 'bg-white text-[#05224C] shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Deceased (In Memory)
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
@@ -964,6 +1037,7 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
                   <input
                     type="text"
                     required
+                    maxLength={80}
                     value={firstName}
                     onChange={(e) => setFirstName(e.target.value)}
                     placeholder="First name"
@@ -977,6 +1051,7 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
                   <input
                     type="text"
                     required
+                    maxLength={80}
                     value={lastName}
                     onChange={(e) => setLastName(e.target.value)}
                     placeholder="Last name"
@@ -985,46 +1060,153 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
                 </div>
               </div>
 
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase text-slate-700">
-                  Gender (Optional)
-                </label>
-                <select
-                  value={gender}
-                  onChange={(e) => setGender(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#05224C]"
-                >
-                  {familyGenderOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-                <p className="mt-1 text-[11px] text-slate-500">This only changes relationship wording; it is never inferred from a name.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase text-slate-700">
+                    Gender (Optional)
+                  </label>
+                  <select
+                    value={gender}
+                    onChange={(e) => setGender(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#05224C]"
+                  >
+                    {familyGenderOptions.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Relationship to You *
+                  </label>
+                  <select
+                    value={relationshipType}
+                    onChange={(e) => setRelationshipType(e.target.value as RelationshipType)}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none bg-white"
+                  >
+                    {getRelationshipOptions(gender).map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  Relationship to You *
-                </label>
-                <select
-                  value={relationshipType}
-                  onChange={(e) => setRelationshipType(e.target.value as RelationshipType)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none bg-white"
-                >
-                  {getRelationshipOptions(gender).map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </div>
+              <p className="text-[11px] text-slate-500 -mt-2">
+                Gender only changes relationship wording; it is never inferred from a name.
+              </p>
 
-              <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2.5">
-                <p className="text-xs font-semibold text-slate-800">Living relative privacy</p>
-                <p className="mt-1 text-xs text-slate-600">This creates a basic family placeholder. Invite your relative to claim it; they can add personal details and roots themselves after joining.</p>
-              </div>
+              {!isLiving ? (
+                <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wider text-[#05224C]">
+                      Remembered Relative Details
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-slate-500">
+                      Record life dates, family names, geographic roots, and memories for this relative.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                      Middle / Maiden / Other Names
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={120}
+                      value={otherNames}
+                      onChange={(e) => setOtherNames(e.target.value)}
+                      placeholder="Optional middle, maiden, or traditional names"
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                        Birth Year / Date
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={32}
+                        value={birthDate}
+                        onChange={(e) => setBirthDate(e.target.value)}
+                        placeholder="e.g. 1942 or 1942-05-14"
+                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                        Passing Year / Date
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={32}
+                        value={deathDate}
+                        onChange={(e) => setDeathDate(e.target.value)}
+                        placeholder="e.g. 2018 or 2018-11-03"
+                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                        Origin Town / Village / City
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={120}
+                        value={originPlaceName}
+                        onChange={(e) => setOriginPlaceName(e.target.value)}
+                        placeholder="e.g. Enugu or Bristol"
+                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                        Origin Country
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={100}
+                        value={originPlaceCountry}
+                        onChange={(e) => setOriginPlaceCountry(e.target.value)}
+                        placeholder="e.g. Nigeria or United Kingdom"
+                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                      Life Details & Remembrance Notes
+                    </label>
+                    <textarea
+                      rows={3}
+                      maxLength={600}
+                      value={notes}
+                      onChange={(e) => setNotes(e.target.value)}
+                      placeholder="Life story, family role, resting place, or cherished memories..."
+                      className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-[#05224C] focus:outline-none resize-none"
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2.5">
+                  <p className="text-xs font-semibold text-slate-800">Living relative privacy</p>
+                  <p className="mt-1 text-xs text-slate-600">This creates a basic family placeholder. Invite your relative to claim it; they can add personal details and roots themselves after joining.</p>
+                </div>
+              )}
 
               <div className="pt-2 flex items-center justify-end space-x-3">
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => {
+                    setShowAddModal(false);
+                    resetAddForm();
+                  }}
                   className="px-4 py-2 text-sm text-slate-600 hover:text-slate-900 font-medium"
                 >
                   Cancel
@@ -1136,13 +1318,21 @@ const MemberCard: React.FC<{
             <span>·</span>
             {member.hasAccount ? (
               <span className="text-emerald-700 font-medium">Member</span>
+            ) : !member.isLiving ? (
+              <span className="text-slate-600 font-medium">
+                {member.birthDate || member.deathDate
+                  ? `In Memory (${[member.birthDate, member.deathDate].filter(Boolean).join(' – ')})`
+                  : 'In Memory'}
+              </span>
             ) : (
               <span className="text-amber-700">Unlinked</span>
             )}
-            {member.placeOfOrigin && (
+            {member.placeOfOrigin && (member.placeOfOrigin.name || member.placeOfOrigin.country) && (
               <>
                 <span>·</span>
-                <span className="truncate">{member.placeOfOrigin.name}</span>
+                <span className="truncate">
+                  {[member.placeOfOrigin.name, member.placeOfOrigin.country].filter(Boolean).join(', ')}
+                </span>
               </>
             )}
           </div>

@@ -79,7 +79,7 @@ export const DIRTY_DOZEN_PAYLOADS: DirtyDozenCase[] = [
     name: 'Email Spoofing - Unverified Admin Email Claim',
     targetPath: 'adminLogs/log_1',
     operation: 'list',
-    auth: { uid: 'spoof_uid', email: 'ossaiwilliams@gmail.com', email_verified: false },
+    auth: { uid: 'spoof_uid', email: 'alphaonesolutionsltd@gmail.com', email_verified: false },
     expectedOutcome: 'PERMISSION_DENIED',
   },
   {
@@ -146,7 +146,7 @@ export const DIRTY_DOZEN_PAYLOADS: DirtyDozenCase[] = [
     name: 'Audit Immutability Violation - Delete Admin Log',
     targetPath: 'adminLogs/log_1',
     operation: 'delete',
-    auth: { uid: 'admin_uid', email: 'ossaiwilliams@gmail.com', email_verified: true },
+    auth: { uid: 'admin_uid', email: 'alphaonesolutionsltd@gmail.com', email_verified: true },
     expectedOutcome: 'PERMISSION_DENIED',
   },
 ];

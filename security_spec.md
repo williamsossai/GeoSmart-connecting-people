@@ -18,7 +18,7 @@
 2. **Privilege Escalation (Role/Status Tamper Update)**: Updating `/users/{uid}` with `role: 'admin'` or changing `status: 'suspended'` back to `'active'` → `PERMISSION_DENIED`.
 3. **Shadow Update / Ghost Field Injection**: Updating `/users/{uid}/places/{placeId}` with an extra undocumented field `{ name: 'Lagos', isVerified: true }` → `PERMISSION_DENIED`.
 4. **Cross-Tenant Ownership Spoofing**: Creating `/users/victimUid/places/p1` or `/users/attackerUid/places/p1` with `ownerUid: 'victimUid'` → `PERMISSION_DENIED`.
-5. **Email Spoofing Without Verification**: Accessing protected records or bootstrap admin actions with `email: 'ossaiwilliams@gmail.com'` and `email_verified: false` → `PERMISSION_DENIED`.
+5. **Email Spoofing Without Verification**: Accessing protected records or bootstrap admin actions with `email: 'alphaonesolutionsltd@gmail.com'` and `email_verified: false` → `PERMISSION_DENIED`.
 6. **PII Blanket / Cross-User Read**: Reading `/users/otherUid` directly or listing `/sharedProfiles` → `PERMISSION_DENIED`.
 7. **Private SharedProfile Leak**: Reading `/sharedProfiles/otherUid` when `visibility == 'private'` → `PERMISSION_DENIED`.
 8. **Path Poisoning (1KB+ or Special-Char ID)**: Creating `/users/{uid}/places/../../../admin` or a 200-char ID → `PERMISSION_DENIED`.

@@ -71,6 +71,16 @@ export const FamilyTreeNodeCard: React.FC<FamilyTreeNodeCardProps> = ({
               <CheckCircle className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
               <span className="hidden sm:inline">Member</span>
             </span>
+          ) : !node.isLiving ? (
+            <span
+              title="Remembered Relative (Deceased)"
+              className={`font-medium rounded bg-slate-100 text-slate-700 border border-slate-200 flex items-center space-x-1 ${
+                isCompact ? 'text-[9px] px-1 py-0.5' : 'text-[10px] px-1.5 py-0.5'
+              }`}
+            >
+              <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>
+              <span className="hidden sm:inline">In Memory</span>
+            </span>
           ) : (
             <span
               title="Family profile (Unclaimed account)"
@@ -135,6 +145,12 @@ export const FamilyTreeNodeCard: React.FC<FamilyTreeNodeCardProps> = ({
             </p>
           )}
 
+          {!node.isLiving && (node.birthDate || node.deathDate) && (
+            <p className={`truncate ${isCompact ? 'text-[10px]' : 'text-[11px]'} text-slate-500`}>
+              {[node.birthDate, node.deathDate].filter(Boolean).join(' – ')}
+            </p>
+          )}
+
           {/* Place of Origin / Roots */}
           {node.placeOfOrigin ? (
             <p
@@ -146,15 +162,15 @@ export const FamilyTreeNodeCard: React.FC<FamilyTreeNodeCardProps> = ({
               <span className="truncate">{node.placeOfOrigin}</span>
             </p>
           ) : !isCompact ? (
-            <p className={`text-[10px] mt-0.5 ${isSelf ? 'text-slate-300' : 'text-slate-400'}`}>
+            <p className={`text-[10px] mt-0.5 truncate ${isSelf ? 'text-slate-300' : 'text-slate-400'}`}>
               {node.notes || 'Tap for details'}
             </p>
           ) : null}
         </div>
       </div>
 
-      {/* Footer prompt if not claimed */}
-      {!isSelf && !node.hasAccount && !isCompact && (
+      {/* Footer prompt if living and not claimed */}
+      {!isSelf && !node.hasAccount && node.isLiving && !isCompact && (
         <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-sky-700 font-medium group-hover:text-sky-800">
           <span className="flex items-center space-x-1">
             <Mail className="w-2.5 h-2.5" />

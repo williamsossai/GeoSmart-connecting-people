@@ -96,6 +96,8 @@ export interface FamilyMemberWithPerson {
   notes?: string | null;
   gender?: string | null;
   isLiving: boolean;
+  birthDate?: string | null;
+  deathDate?: string | null;
   placesCount?: number;
   userId?: number | null;
   hasAccount?: boolean;
@@ -119,6 +121,8 @@ export interface FamilyTreeNode {
   generationLabel: string;
   isSelf: boolean;
   isLiving: boolean;
+  birthDate?: string | null;
+  deathDate?: string | null;
   hasAccount: boolean;
   userId?: number | null;
   userEmail?: string | null;

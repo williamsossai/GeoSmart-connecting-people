@@ -26,7 +26,7 @@ service cloud.firestore {
     function isBootstrapAdmin() {
       return isVerifiedUser()
         && request.auth.token.email is string
-        && request.auth.token.email.lower() == 'ossaiwilliams@gmail.com';
+        && request.auth.token.email.lower() == 'alphaonesolutionsltd@gmail.com';
     }
 
     function isAdmin() {
@@ -210,6 +210,7 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'id', 'numericId', 'ownerUid', 'linkedUid', 'pendingInviteId',
           'firstName', 'lastName', 'otherNames', 'gender', 'isLiving',
+          'birthDate', 'deathDate',
           'relationshipType', 'inverseRelationshipType', 'notes', 'visibility',
           'originPlaceName', 'originPlaceCountry', 'createdAt', 'updatedAt'
         ])
@@ -225,6 +226,8 @@ service cloud.firestore {
         && data.otherNames is string && data.otherNames.size() <= 120
         && isValidGender(data.gender)
         && data.isLiving is bool
+        && (!('birthDate' in data.keys()) || (data.birthDate is string && data.birthDate.size() <= 32))
+        && (!('deathDate' in data.keys()) || (data.deathDate is string && data.deathDate.size() <= 32))
         && isValidRelationshipType(data.relationshipType)
         && isValidRelationshipType(data.inverseRelationshipType)
         && data.notes is string && data.notes.size() <= 600
@@ -392,11 +395,15 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          // Action: Owner updating profile, onboarding, or notification preferences (cannot touch role/status)
+          // Action: Owner updating profile, onboarding, or notification preferences (cannot escalate role/status; non-admins with stale admin role can demote to user)
           (
             isOwner(uid)
             && incoming().status == existing().status
-            && (incoming().role == existing().role || (isBootstrapAdmin() && incoming().role == 'admin'))
+            && (
+              incoming().role == existing().role
+              || (isBootstrapAdmin() && incoming().role == 'admin')
+              || (!isAdmin() && existing().role == 'admin' && incoming().role == 'user')
+            )
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'displayName', 'firstName', 'lastName', 'otherNames', 'gender',
               'bio', 'currentResidenceSummary', 'originSummary', 'visibility',
@@ -404,11 +411,23 @@ service cloud.firestore {
             ])
           )
           ||
-          // Action: Admin suspending/reactivating account
+          // Action: Admin suspending/reactivating account or bootstrap admin demoting a stale admin role to user
           (
             isAdmin()
-            && incoming().role == existing().role
-            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && (
+              (
+                incoming().role == existing().role
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+              )
+              || (
+                isBootstrapAdmin()
+                && uid != request.auth.uid
+                && existing().role == 'admin'
+                && incoming().role == 'user'
+                && incoming().status == existing().status
+                && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'updatedAt'])
+              )
+            )
           )
         );
       allow delete: if isValidId(uid) && (isOwner(uid) || isAdmin());
@@ -493,16 +512,23 @@ service cloud.firestore {
           && incoming().updatedAt == request.time
           && exists(/databases/$(database)/documents/users/$(uid))
           && (
-            // Tier 1: Owner editing relationship details, gender (unclaimed only), notes, or attaching pending invite
+            // Tier 1: Owner editing relationship details, unclaimed/deceased relative details, or attaching pending invite
             (
               isOwner(uid)
               && incoming().linkedUid == existing().linkedUid
               && incoming().diff(existing()).affectedKeys().hasOnly([
-                'firstName', 'lastName', 'otherNames', 'gender',
-                'relationshipType', 'inverseRelationshipType', 'notes',
-                'visibility', 'originPlaceName', 'originPlaceCountry',
+                'firstName', 'lastName', 'otherNames', 'gender', 'isLiving',
+                'birthDate', 'deathDate', 'relationshipType', 'inverseRelationshipType',
+                'notes', 'visibility', 'originPlaceName', 'originPlaceCountry',
                 'pendingInviteId', 'updatedAt'
               ])
+              && (
+                existing().linkedUid == ''
+                || !incoming().diff(existing()).affectedKeys().hasAny([
+                  'firstName', 'lastName', 'otherNames', 'gender', 'isLiving',
+                  'birthDate', 'deathDate', 'originPlaceName', 'originPlaceCountry'
+                ])
+              )
             )
             ||
             // Tier 2: Invitee atomically linking their verified UID when accepting the matching pending invitation

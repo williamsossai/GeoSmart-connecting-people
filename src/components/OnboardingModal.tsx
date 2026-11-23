@@ -54,6 +54,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
   const [famFirstName, setFamFirstName] = useState('');
   const [famLastName, setFamLastName] = useState('');
   const [famGender, setFamGender] = useState('unspecified');
+  const [famIsLiving, setFamIsLiving] = useState(true);
+  const [famBirthDate, setFamBirthDate] = useState('');
+  const [famDeathDate, setFamDeathDate] = useState('');
+  const [famOriginPlace, setFamOriginPlace] = useState('');
+  const [famOriginCountry, setFamOriginCountry] = useState('');
+  const [famNotes, setFamNotes] = useState('');
   const [famRelation, setFamRelation] = useState<RelationshipType>('parent');
 
   // Step 8: Community
@@ -146,6 +152,14 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
           firstName: famFirstName.trim(),
           lastName: famLastName.trim(),
           gender: famGender === 'unspecified' ? undefined : famGender,
+          isLiving: famIsLiving,
+          birthDate: !famIsLiving ? famBirthDate.trim() || null : null,
+          deathDate: !famIsLiving ? famDeathDate.trim() || null : null,
+          originPlace:
+            !famIsLiving && (famOriginPlace.trim() || famOriginCountry.trim())
+              ? { name: famOriginPlace.trim(), country: famOriginCountry.trim() }
+              : undefined,
+          notes: !famIsLiving ? famNotes.trim() || null : null,
           relationshipType: famRelation,
         });
       }
@@ -407,6 +421,32 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
                 </p>
               </div>
 
+              <div>
+                <span className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
+                  Relative Status
+                </span>
+                <div className="grid grid-cols-2 gap-2 rounded-xl border border-slate-200 bg-slate-100 p-1">
+                  <button
+                    type="button"
+                    onClick={() => setFamIsLiving(true)}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                      famIsLiving ? 'bg-white text-[#05224C] shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Living Relative
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFamIsLiving(false)}
+                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${
+                      !famIsLiving ? 'bg-white text-[#05224C] shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Deceased (In Memory)
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
@@ -414,6 +454,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
                   </label>
                   <input
                     type="text"
+                    maxLength={80}
                     value={famFirstName}
                     onChange={(e) => setFamFirstName(e.target.value)}
                     placeholder="First name"
@@ -426,6 +467,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
                   </label>
                   <input
                     type="text"
+                    maxLength={80}
                     value={famLastName}
                     onChange={(e) => setFamLastName(e.target.value)}
                     placeholder="Last name"
@@ -434,29 +476,105 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
                 </div>
               </div>
 
-              <div>
-                <label className="mb-1 block text-xs font-semibold uppercase text-slate-700">Their gender (Optional)</label>
-                <select
-                  value={famGender}
-                  onChange={(e) => setFamGender(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#05224C]"
-                >
-                  {familyGenderOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase text-slate-700">Their gender (Optional)</label>
+                  <select
+                    value={famGender}
+                    onChange={(e) => setFamGender(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#05224C]"
+                  >
+                    {familyGenderOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    How are you connected?
+                  </label>
+                  <select
+                    value={famRelation}
+                    onChange={(e) => setFamRelation(e.target.value as RelationshipType)}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none bg-white"
+                  >
+                    {getRelationshipOptions(famGender).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                  </select>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                  How are you connected?
-                </label>
-                <select
-                  value={famRelation}
-                  onChange={(e) => setFamRelation(e.target.value as RelationshipType)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#05224C] focus:outline-none bg-white"
-                >
-                  {getRelationshipOptions(famGender).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
-              </div>
+              {!famIsLiving && (
+                <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3.5">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 uppercase mb-1">
+                        Birth Year / Date
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={32}
+                        value={famBirthDate}
+                        onChange={(e) => setFamBirthDate(e.target.value)}
+                        placeholder="e.g. 1942"
+                        className="w-full px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 uppercase mb-1">
+                        Passing Year / Date
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={32}
+                        value={famDeathDate}
+                        onChange={(e) => setFamDeathDate(e.target.value)}
+                        placeholder="e.g. 2018"
+                        className="w-full px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 uppercase mb-1">
+                        Origin Town / City
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={120}
+                        value={famOriginPlace}
+                        onChange={(e) => setFamOriginPlace(e.target.value)}
+                        placeholder="e.g. Enugu"
+                        className="w-full px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 uppercase mb-1">
+                        Origin Country
+                      </label>
+                      <input
+                        type="text"
+                        maxLength={100}
+                        value={famOriginCountry}
+                        onChange={(e) => setFamOriginCountry(e.target.value)}
+                        placeholder="e.g. Nigeria"
+                        className="w-full px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 uppercase mb-1">
+                      Remembrance Notes
+                    </label>
+                    <input
+                      type="text"
+                      maxLength={600}
+                      value={famNotes}
+                      onChange={(e) => setFamNotes(e.target.value)}
+                      placeholder="Optional life details or memories"
+                      className="w-full px-3 py-1.5 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-[#05224C] focus:outline-none"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
