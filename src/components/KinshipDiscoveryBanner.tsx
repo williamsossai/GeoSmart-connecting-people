@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Sparkles, CheckCircle2, ArrowRight, AlertCircle } from 'lucide-react';
 import type { KinshipDiscoveryMatch } from '../types.ts';
+import { useAuth } from './AuthContext.tsx';
+import { claimDiscoveredPersonFs, getKinshipDiscoverySuggestionsFs } from '../lib/firestore-repo.ts';
 
 interface KinshipDiscoveryBannerProps {
   idToken: string | null;
@@ -8,26 +10,21 @@ interface KinshipDiscoveryBannerProps {
 }
 
 export const KinshipDiscoveryBanner: React.FC<KinshipDiscoveryBannerProps> = ({
-  idToken,
   onClaimed,
 }) => {
+  const { currentUser } = useAuth();
   const [matches, setMatches] = useState<KinshipDiscoveryMatch[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [, setLoading] = useState(false);
   const [claimingId, setClaimingId] = useState<number | null>(null);
   const [successNotice, setSuccessNotice] = useState<string | null>(null);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
   const fetchDiscovery = async () => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/family/discovery', {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setMatches(data);
-      }
+      const data = await getKinshipDiscoverySuggestionsFs(currentUser.uid);
+      setMatches(data.suggestions);
     } catch (err) {
       console.error('Error fetching discovery matches:', err);
     } finally {
@@ -37,28 +34,15 @@ export const KinshipDiscoveryBanner: React.FC<KinshipDiscoveryBannerProps> = ({
 
   useEffect(() => {
     fetchDiscovery();
-  }, [idToken]);
+  }, [currentUser?.uid]);
 
   const handleClaim = async (invitationId: number, relativeName: string) => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setClaimingId(invitationId);
     setErrorNotice(null);
 
     try {
-      const res = await fetch('/api/family/claim', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({ invitationId }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to connect family network');
-      }
-
+      await claimDiscoveredPersonFs(currentUser.uid, invitationId);
       setSuccessNotice(`Successfully connected! You have joined ${relativeName}'s family tree.`);
       await fetchDiscovery();
       onClaimed();

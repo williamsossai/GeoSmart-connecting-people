@@ -11,6 +11,7 @@ import {
   Loader2,
 } from 'lucide-react';
 import { useAuth } from './AuthContext.tsx';
+import { exportUserDataFs } from '../lib/firestore-repo.ts';
 
 interface NavigationProps {
   onNavigate: (tab: 'home' | 'profile') => void;
@@ -25,7 +26,7 @@ export const Navigation: React.FC<NavigationProps> = ({
   onOpenSettings,
   onOpenDeleteAccount,
 }) => {
-  const { currentUser, userOverview, idToken, signOut } = useAuth();
+  const { currentUser, userOverview, signOut } = useAuth();
 
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -59,15 +60,12 @@ export const Navigation: React.FC<NavigationProps> = ({
     : displayName.substring(0, 2).toUpperCase();
 
   const handleExportData = async () => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setIsExporting(true);
     setExportFeedback(null);
     try {
-      const res = await fetch('/api/user/export', {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (!res.ok) throw new Error('Export failed');
-      const blob = await res.blob();
+      const exportData = await exportUserDataFs(currentUser.uid);
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

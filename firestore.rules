@@ -1,0 +1,663 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // 1. Global Safety Net (Default Deny Catch-All)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ---------------------------------------------------------
+    // Global Hardened Primitives
+    // ---------------------------------------------------------
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isVerifiedUser() && request.auth.uid == uid;
+    }
+
+    function isBootstrapAdmin() {
+      return isVerifiedUser()
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() == 'ossaiwilliams@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrapAdmin()
+        || (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidEmail(email) {
+      return email is string
+        && email.size() >= 3
+        && email.size() <= 254
+        && email.matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$');
+    }
+
+    function isValidVisibility(vis) {
+      return vis is string && vis.size() <= 16 && vis in ['private', 'shared', 'public'];
+    }
+
+    function isValidGender(g) {
+      return g is string && g.size() <= 20 && g in ['female', 'male', 'non_binary', 'another', 'unspecified'];
+    }
+
+    function isValidRelationshipType(rel) {
+      return rel is string
+        && rel.size() <= 24
+        && rel in ['parent', 'child', 'spouse', 'sibling', 'grandparent', 'grandchild', 'relative', 'other'];
+    }
+
+    // ---------------------------------------------------------
+    // Validation Blueprints (Anti-Update-Gap Helpers)
+    // ---------------------------------------------------------
+    function isValidUserAccount(data, uid) {
+      return data.keys().hasAll([
+          'uid', 'numericId', 'email', 'displayName', 'firstName', 'lastName',
+          'otherNames', 'gender', 'isLiving', 'bio', 'currentResidenceSummary',
+          'originSummary', 'visibility', 'role', 'status', 'onboardingCompleted',
+          'alertsEnabled', 'activityReadAt', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'numericId', 'email', 'displayName', 'firstName', 'lastName',
+          'otherNames', 'gender', 'isLiving', 'bio', 'currentResidenceSummary',
+          'originSummary', 'visibility', 'role', 'status', 'onboardingCompleted',
+          'alertsEnabled', 'activityReadAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.uid) && data.uid == uid
+        && data.numericId is int && data.numericId >= 1
+        && isValidEmail(data.email)
+        && data.displayName is string && data.displayName.size() <= 120
+        && data.firstName is string && data.firstName.size() >= 1 && data.firstName.size() <= 80
+        && data.lastName is string && data.lastName.size() <= 80
+        && data.otherNames is string && data.otherNames.size() <= 120
+        && isValidGender(data.gender)
+        && data.isLiving is bool
+        && data.bio is string && data.bio.size() <= 1500
+        && data.currentResidenceSummary is string && data.currentResidenceSummary.size() <= 200
+        && data.originSummary is string && data.originSummary.size() <= 200
+        && isValidVisibility(data.visibility)
+        && data.role is string && data.role.size() <= 16 && data.role in ['user', 'admin']
+        && data.status is string && data.status.size() <= 16 && data.status in ['active', 'suspended']
+        && data.onboardingCompleted is bool
+        && data.alertsEnabled is bool
+        && data.activityReadAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSharedProfile(data, uid) {
+      return data.keys().hasAll([
+          'uid', 'numericId', 'displayName', 'firstName', 'lastName', 'otherNames',
+          'gender', 'originSummary', 'currentResidenceSummary', 'placeOfOriginName',
+          'placeOfOriginCountry', 'sharedPlacesCount', 'visibility', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'numericId', 'displayName', 'firstName', 'lastName', 'otherNames',
+          'gender', 'originSummary', 'currentResidenceSummary', 'placeOfOriginName',
+          'placeOfOriginCountry', 'sharedPlacesCount', 'visibility', 'updatedAt'
+        ])
+        && isValidId(data.uid) && data.uid == uid
+        && data.numericId is int && data.numericId >= 1
+        && data.displayName is string && data.displayName.size() <= 120
+        && data.firstName is string && data.firstName.size() >= 1 && data.firstName.size() <= 80
+        && data.lastName is string && data.lastName.size() <= 80
+        && data.otherNames is string && data.otherNames.size() <= 120
+        && isValidGender(data.gender)
+        && data.originSummary is string && data.originSummary.size() <= 200
+        && data.currentResidenceSummary is string && data.currentResidenceSummary.size() <= 200
+        && data.placeOfOriginName is string && data.placeOfOriginName.size() <= 120
+        && data.placeOfOriginCountry is string && data.placeOfOriginCountry.size() <= 100
+        && data.sharedPlacesCount is int && data.sharedPlacesCount >= 0 && data.sharedPlacesCount <= 500
+        && isValidVisibility(data.visibility)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPlaceConnection(data, uid, placeId) {
+      return data.keys().hasAll([
+          'id', 'numericId', 'ownerUid', 'name', 'country', 'stateRegion',
+          'districtLga', 'townCity', 'villageLocality', 'placeType', 'connectionType',
+          'humanLabel', 'isCurrent', 'notes', 'visibility', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'numericId', 'ownerUid', 'name', 'country', 'stateRegion',
+          'districtLga', 'townCity', 'villageLocality', 'placeType', 'connectionType',
+          'humanLabel', 'isCurrent', 'notes', 'visibility', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id == placeId
+        && data.numericId is int && data.numericId >= 1
+        && isValidId(data.ownerUid) && data.ownerUid == uid
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.country is string && data.country.size() >= 1 && data.country.size() <= 100
+        && data.stateRegion is string && data.stateRegion.size() <= 120
+        && data.districtLga is string && data.districtLga.size() <= 120
+        && data.townCity is string && data.townCity.size() <= 120
+        && data.villageLocality is string && data.villageLocality.size() <= 120
+        && data.placeType is string && data.placeType.size() <= 40
+        && data.connectionType is string && data.connectionType.size() <= 32
+        && data.connectionType in [
+          'residence', 'origin', 'family_ancestral', 'birthplace', 'birth',
+          'childhood', 'study', 'work', 'frequent_visit', 'other'
+        ]
+        && data.humanLabel is string && data.humanLabel.size() <= 120
+        && data.isCurrent is bool
+        && data.notes is string && data.notes.size() <= 600
+        && isValidVisibility(data.visibility)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCommunityConnection(data, uid, communityId) {
+      return data.keys().hasAll([
+          'id', 'numericId', 'ownerUid', 'name', 'communityType', 'description',
+          'associatedPlaceName', 'associatedPlaceCountry', 'connectionType',
+          'humanLabel', 'notes', 'visibility', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'numericId', 'ownerUid', 'name', 'communityType', 'description',
+          'associatedPlaceName', 'associatedPlaceCountry', 'connectionType',
+          'humanLabel', 'notes', 'visibility', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id == communityId
+        && data.numericId is int && data.numericId >= 1
+        && isValidId(data.ownerUid) && data.ownerUid == uid
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 140
+        && data.communityType is string && data.communityType.size() <= 32
+        && data.communityType in [
+          'hometown', 'village', 'town', 'local', 'diaspora', 'cultural_association', 'other'
+        ]
+        && data.description is string && data.description.size() <= 600
+        && data.associatedPlaceName is string && data.associatedPlaceName.size() <= 120
+        && data.associatedPlaceCountry is string && data.associatedPlaceCountry.size() <= 100
+        && data.connectionType is string && data.connectionType.size() <= 32
+        && data.connectionType in [
+          'resident', 'member', 'origin', 'ancestral', 'ancestral_connection',
+          'family', 'family_connection', 'marriage', 'marriage_connection', 'professional', 'other'
+        ]
+        && data.humanLabel is string && data.humanLabel.size() <= 120
+        && data.notes is string && data.notes.size() <= 600
+        && data.visibility is string && data.visibility.size() <= 16 && data.visibility == 'private'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFamilyMemberRecord(data, uid, memberId) {
+      return data.keys().hasAll([
+          'id', 'numericId', 'ownerUid', 'linkedUid', 'pendingInviteId',
+          'firstName', 'lastName', 'otherNames', 'gender', 'isLiving',
+          'relationshipType', 'inverseRelationshipType', 'notes', 'visibility',
+          'originPlaceName', 'originPlaceCountry', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'numericId', 'ownerUid', 'linkedUid', 'pendingInviteId',
+          'firstName', 'lastName', 'otherNames', 'gender', 'isLiving',
+          'relationshipType', 'inverseRelationshipType', 'notes', 'visibility',
+          'originPlaceName', 'originPlaceCountry', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id == memberId
+        && data.numericId is int && data.numericId >= 1
+        && isValidId(data.ownerUid) && data.ownerUid == uid
+        && data.linkedUid is string && data.linkedUid.size() <= 128
+        && (data.linkedUid == '' || isValidId(data.linkedUid))
+        && data.pendingInviteId is string && data.pendingInviteId.size() <= 128
+        && (data.pendingInviteId == '' || isValidId(data.pendingInviteId))
+        && data.firstName is string && data.firstName.size() >= 1 && data.firstName.size() <= 80
+        && data.lastName is string && data.lastName.size() >= 1 && data.lastName.size() <= 80
+        && data.otherNames is string && data.otherNames.size() <= 120
+        && isValidGender(data.gender)
+        && data.isLiving is bool
+        && isValidRelationshipType(data.relationshipType)
+        && isValidRelationshipType(data.inverseRelationshipType)
+        && data.notes is string && data.notes.size() <= 600
+        && isValidVisibility(data.visibility)
+        && data.originPlaceName is string && data.originPlaceName.size() <= 120
+        && data.originPlaceCountry is string && data.originPlaceCountry.size() <= 100
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFamilyInvitation(data, inviteId) {
+      return data.keys().hasAll([
+          'id', 'numericId', 'inviterUid', 'inviterName', 'inviterFirstName',
+          'inviterLastName', 'inviterGender', 'memberId', 'memberNumericId',
+          'personName', 'inviteeEmail', 'inviteCodeHash', 'relationshipType',
+          'gender', 'inviterFamilyCount', 'status', 'acceptedByUid',
+          'expiresAt', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'numericId', 'inviterUid', 'inviterName', 'inviterFirstName',
+          'inviterLastName', 'inviterGender', 'memberId', 'memberNumericId',
+          'personName', 'inviteeEmail', 'inviteCodeHash', 'relationshipType',
+          'gender', 'inviterFamilyCount', 'status', 'acceptedByUid',
+          'expiresAt', 'acceptedAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id == inviteId
+        && data.numericId is int && data.numericId >= 1
+        && isValidId(data.inviterUid)
+        && data.inviterName is string && data.inviterName.size() >= 1 && data.inviterName.size() <= 120
+        && data.inviterFirstName is string && data.inviterFirstName.size() >= 1 && data.inviterFirstName.size() <= 80
+        && data.inviterLastName is string && data.inviterLastName.size() <= 80
+        && isValidGender(data.inviterGender)
+        && isValidId(data.memberId)
+        && data.memberNumericId is int && data.memberNumericId >= 1
+        && data.personName is string && data.personName.size() >= 1 && data.personName.size() <= 160
+        && isValidEmail(data.inviteeEmail)
+        && data.inviteCodeHash is string && data.inviteCodeHash.size() == 64 && data.inviteCodeHash.matches('^[a-f0-9]{64}$')
+        && isValidRelationshipType(data.relationshipType)
+        && isValidGender(data.gender)
+        && data.inviterFamilyCount is int && data.inviterFamilyCount >= 0 && data.inviterFamilyCount <= 5000
+        && data.status is string && data.status.size() <= 16 && data.status in ['pending', 'accepted', 'expired', 'revoked']
+        && data.acceptedByUid is string && data.acceptedByUid.size() <= 128
+        && (data.acceptedByUid == '' || isValidId(data.acceptedByUid))
+        && data.expiresAt is timestamp
+        && (!('acceptedAt' in data.keys()) || data.acceptedAt is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidActivityEvent(data, uid, eventId) {
+      return data.keys().hasAll([
+          'id', 'numericId', 'ownerUid', 'eventType', 'summary', 'targetType',
+          'scope', 'previousVisibility', 'selectedVisibility', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'numericId', 'ownerUid', 'eventType', 'summary', 'targetType',
+          'scope', 'previousVisibility', 'selectedVisibility', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id == eventId
+        && data.numericId is int && data.numericId >= 1
+        && isValidId(data.ownerUid) && data.ownerUid == uid
+        && data.eventType is string && data.eventType.size() >= 1 && data.eventType.size() <= 64
+        && data.summary is string && data.summary.size() >= 1 && data.summary.size() <= 250
+        && data.targetType is string && data.targetType.size() <= 40
+        && data.scope is string && data.scope.size() <= 48
+        && data.previousVisibility is string && data.previousVisibility.size() <= 16
+        && data.selectedVisibility is string && data.selectedVisibility.size() <= 16
+        && data.createdAt is timestamp;
+    }
+
+    function isValidFamilyStoryRecord(data, uid, storyId) {
+      return data.keys().hasAll([
+          'id', 'numericId', 'ownerUid', 'ownerName', 'title', 'description',
+          'mediaType', 'contentType', 'fileSize', 'visibility', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'numericId', 'ownerUid', 'ownerName', 'title', 'description',
+          'mediaType', 'contentType', 'fileSize', 'visibility', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id == storyId
+        && data.numericId is int && data.numericId >= 1
+        && isValidId(data.ownerUid) && data.ownerUid == uid
+        && data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 120
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.description is string && data.description.size() <= 1200
+        && data.mediaType is string && data.mediaType.size() <= 16 && data.mediaType in ['audio', 'video']
+        && data.contentType is string && data.contentType.size() <= 80
+        && data.fileSize is int && data.fileSize >= 0 && data.fileSize <= 52428800
+        && data.visibility is string && data.visibility.size() <= 16 && data.visibility in ['private', 'family']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAdminAccessLog(data, logId) {
+      return data.keys().hasAll([
+          'id', 'numericId', 'adminUid', 'adminNumericId', 'adminEmail',
+          'action', 'targetUid', 'targetNumericId', 'targetAccountCode',
+          'reason', 'result', 'timestamp'
+        ])
+        && data.keys().hasOnly([
+          'id', 'numericId', 'adminUid', 'adminNumericId', 'adminEmail',
+          'action', 'targetUid', 'targetNumericId', 'targetAccountCode',
+          'reason', 'result', 'timestamp'
+        ])
+        && isValidId(data.id) && data.id == logId
+        && data.numericId is int && data.numericId >= 1
+        && isValidId(data.adminUid) && data.adminUid == request.auth.uid
+        && data.adminNumericId is int && data.adminNumericId >= 1
+        && isValidEmail(data.adminEmail)
+        && data.action is string && data.action.size() >= 1 && data.action.size() <= 64
+        && data.targetUid is string && data.targetUid.size() <= 128
+        && data.targetNumericId is int && data.targetNumericId >= 0
+        && data.targetAccountCode is string && data.targetAccountCode.size() <= 32
+        && data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 400
+        && data.result is string && data.result.size() <= 16 && data.result in ['SUCCESS', 'DENIED', 'ERROR']
+        && data.timestamp is timestamp;
+    }
+
+    // ---------------------------------------------------------
+    // Test Connection Probe
+    // ---------------------------------------------------------
+    match /test/{docId} {
+      allow get: if docId == 'connection';
+      allow list, write: if false;
+    }
+
+    // ---------------------------------------------------------
+    // Trusted Admins & Audit Logs
+    // ---------------------------------------------------------
+    match /admins/{uid} {
+      allow get: if isValidId(uid) && (isOwner(uid) || isAdmin());
+      allow list, write: if false;
+    }
+
+    match /adminLogs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isBootstrapAdmin();
+      allow create: if isValidId(logId)
+        && isAdmin()
+        && isValidAdminAccessLog(incoming(), logId)
+        && incoming().timestamp == request.time;
+      allow update, delete: if false;
+    }
+
+    // ---------------------------------------------------------
+    // PII-Isolated Private User Accounts & Subcollections
+    // ---------------------------------------------------------
+    match /users/{uid} {
+      allow get: if isValidId(uid) && (isOwner(uid) || isAdmin());
+      allow list: if isBootstrapAdmin();
+      allow create: if isValidId(uid)
+        && isOwner(uid)
+        && isValidUserAccount(incoming(), uid)
+        && incoming().status == 'active'
+        && (incoming().role == 'user' || (incoming().role == 'admin' && isAdmin()))
+        && request.auth.token.email is string
+        && incoming().email == request.auth.token.email.lower()
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && incoming().activityReadAt == request.time;
+      allow update: if isValidId(uid)
+        && isValidUserAccount(incoming(), uid)
+        && incoming().uid == existing().uid
+        && incoming().numericId == existing().numericId
+        && incoming().email == existing().email
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action: Owner updating profile, onboarding, or notification preferences (cannot touch role/status)
+          (
+            isOwner(uid)
+            && incoming().status == existing().status
+            && (incoming().role == existing().role || (isBootstrapAdmin() && incoming().role == 'admin'))
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'firstName', 'lastName', 'otherNames', 'gender',
+              'bio', 'currentResidenceSummary', 'originSummary', 'visibility',
+              'onboardingCompleted', 'alertsEnabled', 'activityReadAt', 'role', 'updatedAt'
+            ])
+          )
+          ||
+          // Action: Admin suspending/reactivating account
+          (
+            isAdmin()
+            && incoming().role == existing().role
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(uid) && (isOwner(uid) || isAdmin());
+
+      match /places/{placeId} {
+        allow get: if isValidId(uid) && isValidId(placeId)
+          && (isOwner(uid) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(uid));
+        allow list: if isBootstrapAdmin() || (isOwner(uid) && existing().ownerUid == request.auth.uid);
+        allow create: if isValidId(uid) && isValidId(placeId)
+          && isOwner(uid)
+          && isValidPlaceConnection(incoming(), uid, placeId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(uid));
+        allow update: if isValidId(uid) && isValidId(placeId)
+          && isOwner(uid)
+          && isValidPlaceConnection(incoming(), uid, placeId)
+          && incoming().id == existing().id
+          && incoming().numericId == existing().numericId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'country', 'stateRegion', 'districtLga', 'townCity',
+            'villageLocality', 'placeType', 'connectionType', 'humanLabel',
+            'isCurrent', 'notes', 'visibility', 'updatedAt'
+          ])
+          && exists(/databases/$(database)/documents/users/$(uid));
+        allow delete: if isValidId(uid) && isValidId(placeId)
+          && (isOwner(uid) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(uid));
+      }
+
+      match /communities/{communityId} {
+        allow get: if isValidId(uid) && isValidId(communityId)
+          && (isOwner(uid) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(uid));
+        allow list: if isBootstrapAdmin() || (isOwner(uid) && existing().ownerUid == request.auth.uid);
+        allow create: if isValidId(uid) && isValidId(communityId)
+          && isOwner(uid)
+          && isValidCommunityConnection(incoming(), uid, communityId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(uid));
+        allow update: if isValidId(uid) && isValidId(communityId)
+          && isOwner(uid)
+          && isValidCommunityConnection(incoming(), uid, communityId)
+          && incoming().id == existing().id
+          && incoming().numericId == existing().numericId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'name', 'communityType', 'description', 'associatedPlaceName',
+            'associatedPlaceCountry', 'connectionType', 'humanLabel',
+            'notes', 'updatedAt'
+          ])
+          && exists(/databases/$(database)/documents/users/$(uid));
+        allow delete: if isValidId(uid) && isValidId(communityId)
+          && (isOwner(uid) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(uid));
+      }
+
+      match /familyMembers/{memberId} {
+        allow get: if isValidId(uid) && isValidId(memberId)
+          && (isOwner(uid) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(uid));
+        allow list: if isBootstrapAdmin() || (isOwner(uid) && existing().ownerUid == request.auth.uid);
+        allow create: if isValidId(uid) && isValidId(memberId)
+          && isOwner(uid)
+          && isValidFamilyMemberRecord(incoming(), uid, memberId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(uid));
+        allow update: if isValidId(uid) && isValidId(memberId)
+          && isValidFamilyMemberRecord(incoming(), uid, memberId)
+          && incoming().id == existing().id
+          && incoming().numericId == existing().numericId
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(uid))
+          && (
+            // Tier 1: Owner editing relationship details, gender (unclaimed only), notes, or attaching pending invite
+            (
+              isOwner(uid)
+              && incoming().linkedUid == existing().linkedUid
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'firstName', 'lastName', 'otherNames', 'gender',
+                'relationshipType', 'inverseRelationshipType', 'notes',
+                'visibility', 'originPlaceName', 'originPlaceCountry',
+                'pendingInviteId', 'updatedAt'
+              ])
+            )
+            ||
+            // Tier 2: Invitee atomically linking their verified UID when accepting the matching pending invitation
+            (
+              isVerifiedUser()
+              && existing().linkedUid == ''
+              && existing().pendingInviteId != ''
+              && incoming().linkedUid == request.auth.uid
+              && incoming().diff(existing()).affectedKeys().hasOnly(['linkedUid', 'updatedAt'])
+              && getAfter(/databases/$(database)/documents/familyInvitations/$(existing().pendingInviteId)).data.status == 'accepted'
+              && getAfter(/databases/$(database)/documents/familyInvitations/$(existing().pendingInviteId)).data.acceptedByUid == request.auth.uid
+            )
+          );
+        allow delete: if isValidId(uid) && isValidId(memberId)
+          && (isOwner(uid) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(uid));
+      }
+
+      match /activityEvents/{eventId} {
+        allow get: if isValidId(uid) && isValidId(eventId)
+          && (isOwner(uid) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(uid));
+        allow list: if isBootstrapAdmin() || (isOwner(uid) && existing().ownerUid == request.auth.uid);
+        allow create: if isValidId(uid) && isValidId(eventId)
+          && isOwner(uid)
+          && isValidActivityEvent(incoming(), uid, eventId)
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/users/$(uid));
+        allow update: if false;
+        allow delete: if isValidId(uid) && isValidId(eventId)
+          && (isOwner(uid) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(uid));
+      }
+
+      match /stories/{storyId} {
+        allow get: if isValidId(uid) && isValidId(storyId)
+          && (isOwner(uid) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(uid));
+        allow list: if isBootstrapAdmin() || (isOwner(uid) && existing().ownerUid == request.auth.uid);
+        allow create: if isValidId(uid) && isValidId(storyId)
+          && isOwner(uid)
+          && isValidFamilyStoryRecord(incoming(), uid, storyId)
+          && incoming().createdAt == request.time
+          && exists(/databases/$(database)/documents/users/$(uid));
+        allow update: if false;
+        allow delete: if isValidId(uid) && isValidId(storyId)
+          && (isOwner(uid) || isAdmin())
+          && exists(/databases/$(database)/documents/users/$(uid));
+      }
+    }
+
+    // ---------------------------------------------------------
+    // Non-PII Shareable Profiles (Pillar 6 Split Collection)
+    // ---------------------------------------------------------
+    match /sharedProfiles/{uid} {
+      allow get: if isValidId(uid) && (
+        isOwner(uid)
+        || isAdmin()
+        || (isVerifiedUser() && (resource == null || existing().visibility in ['shared', 'public']))
+      );
+      allow list: if false;
+      allow create: if isValidId(uid)
+        && isOwner(uid)
+        && isValidSharedProfile(incoming(), uid)
+        && incoming().visibility in ['shared', 'public']
+        && incoming().updatedAt == request.time
+        && existsAfter(/databases/$(database)/documents/users/$(uid));
+      allow update: if isValidId(uid)
+        && isOwner(uid)
+        && isValidSharedProfile(incoming(), uid)
+        && incoming().uid == existing().uid
+        && incoming().numericId == existing().numericId
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'displayName', 'firstName', 'lastName', 'otherNames', 'gender',
+          'originSummary', 'currentResidenceSummary', 'placeOfOriginName',
+          'placeOfOriginCountry', 'sharedPlacesCount', 'visibility', 'updatedAt'
+        ]);
+      allow delete: if isValidId(uid) && (isOwner(uid) || isAdmin());
+    }
+
+    // ---------------------------------------------------------
+    // Family Invitations (Verified-Email Claim & Terminal Lock)
+    // ---------------------------------------------------------
+    match /familyInvitations/{inviteId} {
+      allow get: if isValidId(inviteId) && (
+        isAdmin()
+        || (isVerifiedUser() && (
+          existing().inviterUid == request.auth.uid
+          || (request.auth.token.email is string && existing().inviteeEmail == request.auth.token.email.lower())
+        ))
+      );
+      allow list: if isBootstrapAdmin()
+        || (isVerifiedUser() && existing().inviterUid == request.auth.uid)
+        || (isVerifiedUser() && request.auth.token.email is string && existing().inviteeEmail == request.auth.token.email.lower());
+      allow create: if isValidId(inviteId)
+        && isVerifiedUser()
+        && isValidFamilyInvitation(incoming(), inviteId)
+        && incoming().inviterUid == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().acceptedByUid == ''
+        && !('acceptedAt' in incoming().keys())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid)/familyMembers/$(incoming().memberId))
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/familyMembers/$(incoming().memberId)).data.pendingInviteId == inviteId;
+      allow update: if isValidId(inviteId)
+        && isValidFamilyInvitation(incoming(), inviteId)
+        && incoming().id == existing().id
+        && incoming().numericId == existing().numericId
+        && incoming().inviterUid == existing().inviterUid
+        && incoming().memberId == existing().memberId
+        && incoming().memberNumericId == existing().memberNumericId
+        && incoming().inviteeEmail == existing().inviteeEmail
+        && incoming().inviteCodeHash == existing().inviteCodeHash
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Admin override
+          isAdmin()
+          ||
+          // Terminal State Lock: Non-admins cannot update once status leaves 'pending'
+          (
+            existing().status == 'pending'
+            && (
+              // Tier 1 (Inviter): Revoke or mark expired
+              (
+                isVerifiedUser()
+                && existing().inviterUid == request.auth.uid
+                && incoming().status in ['revoked', 'expired']
+                && incoming().acceptedByUid == ''
+                && !('acceptedAt' in incoming().keys())
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+              )
+              ||
+              // Tier 2 (Verified Invitee): Accept & atomically link inviter's familyMember doc
+              (
+                isVerifiedUser()
+                && request.auth.token.email is string
+                && existing().inviteeEmail == request.auth.token.email.lower()
+                && existing().expiresAt > request.time
+                && incoming().status == 'accepted'
+                && incoming().acceptedByUid == request.auth.uid
+                && incoming().acceptedAt == request.time
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedByUid', 'acceptedAt', 'updatedAt'])
+                && getAfter(/databases/$(database)/documents/users/$(existing().inviterUid)/familyMembers/$(existing().memberId)).data.linkedUid == request.auth.uid
+              )
+            )
+          )
+        );
+      allow delete: if isValidId(inviteId) && (
+        isAdmin()
+        || (isVerifiedUser() && existing().inviterUid == request.auth.uid)
+      );
+    }
+  }
+}

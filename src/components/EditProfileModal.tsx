@@ -4,6 +4,7 @@ import { X, User, Check, AlertCircle, Lock, Share2, Globe } from 'lucide-react';
 import { ProfileLocationSelector } from './ProfileLocationSelector.tsx';
 import type { VisibilitySetting } from '../types.ts';
 import { getOfflineProfileDraft, removeOfflineProfileDraft, saveOfflineProfileDraft, type OfflineProfileValues } from '../lib/offline-vault.ts';
+import { getUserOverviewFs, updateUserProfileFs } from '../lib/firestore-repo.ts';
 
 interface EditProfileModalProps {
   isOpen: boolean;
@@ -106,11 +107,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
 
     try {
       if (recoveredDraft && !overwriteConfirmed) {
-        const latestResponse = await fetch('/api/user/overview', {
-          headers: { Authorization: `Bearer ${idToken}` },
-        });
-        if (!latestResponse.ok) throw new Error('Could not check the latest profile before syncing your saved draft. Please try again.');
-        const latest = await latestResponse.json();
+        const latest = await getUserOverviewFs(currentUser.uid);
         const latestValues: OfflineProfileValues = {
           firstName: latest.person?.firstName || '',
           lastName: latest.person?.lastName || '',
@@ -129,27 +126,15 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({ isOpen, onCl
         }
       }
 
-      const res = await fetch('/api/user/profile', {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          firstName: firstName.trim(),
-          lastName: lastName.trim(),
-          otherNames: otherNames.trim(),
-          bio: bio.trim(),
-          currentResidenceSummary: residenceSummary.trim(),
-          originSummary: originSummary.trim(),
-          visibility,
-        }),
+      await updateUserProfileFs(currentUser.uid, {
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        otherNames: otherNames.trim(),
+        bio: bio.trim(),
+        currentResidenceSummary: residenceSummary.trim(),
+        originSummary: originSummary.trim(),
+        visibility,
       });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to update profile');
-      }
 
       await removeOfflineProfileDraft(currentUser.uid);
       setRecoveredDraft(null);

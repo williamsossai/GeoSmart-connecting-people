@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useAuth } from './AuthContext.tsx';
 import { AlertTriangle, Trash2 } from 'lucide-react';
+import { deleteUserAccountFs } from '../lib/firestore-repo.ts';
+import { auth } from '../lib/firebase.ts';
 
 interface DeleteAccountModalProps {
   isOpen: boolean;
@@ -8,7 +10,7 @@ interface DeleteAccountModalProps {
 }
 
 export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({ isOpen, onClose }) => {
-  const { idToken, signOut } = useAuth();
+  const { currentUser, signOut } = useAuth();
   const [confirmWord, setConfirmWord] = useState('');
   const [deleting, setDeleting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -16,20 +18,15 @@ export const DeleteAccountModal: React.FC<DeleteAccountModalProps> = ({ isOpen, 
   if (!isOpen) return null;
 
   const handleDelete = async () => {
-    if (confirmWord !== 'DELETE' || !idToken) return;
+    if (confirmWord !== 'DELETE' || !currentUser?.uid) return;
     setDeleting(true);
     setErrorMsg(null);
 
     try {
-      const res = await fetch('/api/user/account', {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-
-      if (!res.ok) {
-        throw new Error('Failed to delete account');
+      await deleteUserAccountFs(currentUser.uid);
+      if (auth.currentUser) {
+        await auth.currentUser.delete().catch(() => undefined);
       }
-
       await signOut();
       onClose();
     } catch (err) {

@@ -14,9 +14,14 @@ import {
   Building2,
 } from 'lucide-react';
 import type { CommunityWithConnection } from '../types.ts';
+import {
+  addCommunityConnectionFs,
+  getUserCommunitiesFs,
+  removeCommunityConnectionFs,
+} from '../lib/firestore-repo.ts';
 
 export const CommunityView: React.FC = () => {
-  const { idToken, refreshOverview } = useAuth();
+  const { currentUser, refreshOverview } = useAuth();
   const [communities, setCommunities] = useState<CommunityWithConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -37,16 +42,11 @@ export const CommunityView: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
 
   const fetchCommunities = async () => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/communities', {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setCommunities(data);
-      }
+      const data = await getUserCommunitiesFs(currentUser.uid);
+      setCommunities(data);
     } catch (err) {
       console.error('Failed to load communities:', err);
     } finally {
@@ -56,35 +56,24 @@ export const CommunityView: React.FC = () => {
 
   useEffect(() => {
     fetchCommunities();
-  }, [idToken]);
+  }, [currentUser?.uid]);
 
   const handleAddCommunity = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setSubmitting(true);
     setErrorMsg(null);
     setSuccessMsg(null);
 
     try {
-      const res = await fetch('/api/communities', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          name: name.trim(),
-          communityType,
-          connectionType,
-          humanLabel: humanLabel.trim() || undefined,
-          description: description.trim() || undefined,
-          notes: notes.trim() || undefined,
-        }),
+      await addCommunityConnectionFs(currentUser.uid, {
+        name: name.trim(),
+        communityType,
+        connectionType,
+        humanLabel: humanLabel.trim() || undefined,
+        description: description.trim() || undefined,
+        notes: notes.trim() || undefined,
       });
-
-      if (!res.ok) {
-        throw new Error('Failed to connect community');
-      }
 
       await fetchCommunities();
       await refreshOverview();
@@ -97,24 +86,17 @@ export const CommunityView: React.FC = () => {
       setTimeout(() => setSuccessMsg(null), 4000);
     } catch (err: any) {
       console.error('Error adding community:', err);
-      setErrorMsg('Failed to add community connection.');
+      setErrorMsg(err?.message || 'Failed to add community connection.');
     } finally {
       setSubmitting(false);
     }
   };
 
   const executeRemove = async (connectionId: number, communityName: string) => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
 
     try {
-      const res = await fetch(`/api/communities/${connectionId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to remove community');
-      }
+      await removeCommunityConnectionFs(currentUser.uid, connectionId);
       await fetchCommunities();
       await refreshOverview();
       setSuccessMsg(`Disconnected from "${communityName}".`);

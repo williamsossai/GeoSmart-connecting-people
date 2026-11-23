@@ -3,6 +3,7 @@
   "appId": "1:642093528613:web:ac4fc9ea6e93cf54afb1cc",
   "apiKey": "AIzaSyAecEJ3HuQHctRXziMkmMoL-uROzkMT-DU",
   "authDomain": "outstanding-tractor-wfs6l.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-geosmartconnecti-94a8e9fb-5d16-493f-8c91-cccb6a0be605",
   "storageBucket": "outstanding-tractor-wfs6l.firebasestorage.app",
   "messagingSenderId": "642093528613",
   "measurementId": "",

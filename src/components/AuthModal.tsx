@@ -1,19 +1,48 @@
 import React, { useState } from 'react';
 import { useAuth } from './AuthContext.tsx';
-import { ShieldCheck, Mail, Lock, User, AlertCircle } from 'lucide-react';
+import { ShieldCheck, Mail, Lock, User, AlertCircle, CheckCircle2 } from 'lucide-react';
+
+function mapAuthErrorMessage(err: any): string {
+  switch (err?.code) {
+    case 'auth/operation-not-allowed':
+      return 'Email & password sign-in is not enabled in this Firebase project yet. Click "Continue with Google" above, or enable the Email/Password sign-in method in the Firebase Console.';
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'Invalid email or password. If you originally signed in with Google, click "Continue with Google" above.';
+    case 'auth/email-already-in-use':
+      return 'An account with this email address already exists. Try signing in instead, or click "Continue with Google".';
+    case 'auth/weak-password':
+      return 'Please choose a stronger password (at least 8 characters).';
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address.';
+    case 'auth/too-many-requests':
+      return 'Too many attempts. Please wait a moment and try again.';
+    case 'auth/popup-closed-by-user':
+      return 'Google sign-in was closed before it finished. Please try again.';
+    case 'auth/popup-blocked':
+      return 'Your browser blocked the Google sign-in window. Allow pop-ups for this site and try again.';
+    case 'auth/unauthorized-domain':
+      return `This app domain (${window.location.hostname}) is not authorized for Firebase sign-in. Add it to Firebase Console → Authentication → Settings → Authorized domains.`;
+    default:
+      return err?.message || 'Authentication failed. Please check your details and try again.';
+  }
+}
 
 export const AuthModal: React.FC = () => {
-  const { signInWithGoogle, signInWithEmail, signUpWithEmail } = useAuth();
+  const { signInWithGoogle, signInWithEmail, signUpWithEmail, resetPassword } = useAuth();
   const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setNotice(null);
     setSubmitting(true);
 
     try {
@@ -23,8 +52,7 @@ export const AuthModal: React.FC = () => {
         await signInWithEmail(email, password);
       }
     } catch (err: any) {
-      const msg = err?.message || 'Authentication failed. Please check your credentials.';
-      setError(msg);
+      setError(mapAuthErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -32,26 +60,26 @@ export const AuthModal: React.FC = () => {
 
   const handleGoogleSignIn = async () => {
     setError(null);
+    setNotice(null);
     setSubmitting(true);
     try {
       await signInWithGoogle();
     } catch (err: any) {
-      switch (err?.code) {
-        case 'auth/popup-closed-by-user':
-          setError('Google sign-in was closed before it finished. Please try again.');
-          break;
-        case 'auth/popup-blocked':
-          setError('Your browser blocked the Google sign-in window. Allow pop-ups for this site or open the app in a full browser.');
-          break;
-        case 'auth/unauthorized-domain':
-          setError(`This app domain (${window.location.hostname}) is not authorized for Firebase sign-in. Add it to the Firebase Authentication authorized domains, or create an email account below.`);
-          break;
-        case 'auth/operation-not-allowed':
-          setError('Google sign-in is not enabled for this Firebase project. Enable the Google provider in Firebase Authentication.');
-          break;
-        default:
-          setError(err?.message || 'Google sign-in failed. Please try again or use email sign-in below.');
-      }
+      setError(mapAuthErrorMessage(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    setError(null);
+    setNotice(null);
+    setSubmitting(true);
+    try {
+      await resetPassword(email);
+      setNotice(`Password reset email sent to ${email.trim()}. Check your inbox to set a new password.`);
+    } catch (err: any) {
+      setError(mapAuthErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -77,6 +105,13 @@ export const AuthModal: React.FC = () => {
             <div className="mb-5 p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs flex items-start space-x-2">
               <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
               <span>{error}</span>
+            </div>
+          )}
+
+          {notice && (
+            <div className="mb-5 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-start space-x-2">
+              <CheckCircle2 className="w-4 h-4 flex-shrink-0 mt-0.5 text-emerald-600" />
+              <span>{notice}</span>
             </div>
           )}
 
@@ -154,9 +189,21 @@ export const AuthModal: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1">
-                Password
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wide">
+                  Password
+                </label>
+                {mode === 'signin' && (
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    onClick={() => void handleForgotPassword()}
+                    className="text-[11px] font-medium text-[#05224C] hover:underline disabled:opacity-50"
+                  >
+                    Forgot password?
+                  </button>
+                )}
+              </div>
               <div className="relative">
                 <Lock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
                 <input
@@ -189,6 +236,7 @@ export const AuthModal: React.FC = () => {
                   onClick={() => {
                     setMode('signup');
                     setError(null);
+                    setNotice(null);
                   }}
                   className="font-semibold text-[#05224C] hover:underline"
                 >
@@ -203,6 +251,7 @@ export const AuthModal: React.FC = () => {
                   onClick={() => {
                     setMode('signin');
                     setError(null);
+                    setNotice(null);
                   }}
                   className="font-semibold text-[#05224C] hover:underline"
                 >

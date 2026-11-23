@@ -17,6 +17,13 @@ import {
   User,
 } from 'lucide-react';
 import type { CommunityWithConnection, PlaceWithConnection, VisibilitySetting } from '../types.ts';
+import {
+  exportUserDataFs,
+  getUserCommunitiesFs,
+  getUserPlacesFs,
+  updatePlaceConnectionFs,
+  updateUserProfileFs,
+} from '../lib/firestore-repo.ts';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -31,7 +38,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onOpenEditProfile,
   onOpenDeleteAccount,
 }) => {
-  const { userOverview, idToken, refreshOverview } = useAuth();
+  const { currentUser, userOverview, refreshOverview } = useAuth();
   const { alertsEnabled, updateInvitationAlerts } = useInvitationNotifications();
   const [activeSection, setActiveSection] = useState<'privacy' | 'account' | 'preferences' | 'data'>('privacy');
   const [visibility, setVisibility] = useState<VisibilitySetting>(
@@ -55,20 +62,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, [isOpen, userOverview?.profile?.visibility]);
 
   useEffect(() => {
-    if (!isOpen || !idToken) return;
+    if (!isOpen || !currentUser?.uid) return;
     let cancelled = false;
     setPrivacyRecordsLoading(true);
     setPrivacyRecordsError(null);
     Promise.all([
-      fetch('/api/places', { headers: { Authorization: `Bearer ${idToken}` } }),
-      fetch('/api/communities', { headers: { Authorization: `Bearer ${idToken}` } }),
+      getUserPlacesFs(currentUser.uid),
+      getUserCommunitiesFs(currentUser.uid),
     ])
-      .then(async ([placesResponse, communitiesResponse]) => {
-        if (!placesResponse.ok || !communitiesResponse.ok) throw new Error('Could not load all privacy records.');
-        const [places, communities] = await Promise.all([
-          placesResponse.json() as Promise<PlaceWithConnection[]>,
-          communitiesResponse.json() as Promise<CommunityWithConnection[]>,
-        ]);
+      .then(([places, communities]) => {
         if (!cancelled) {
           setPlaceConnections(places);
           setCommunityConnections(communities);
@@ -80,7 +82,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       })
       .finally(() => { if (!cancelled) setPrivacyRecordsLoading(false); });
     return () => { cancelled = true; };
-  }, [isOpen, idToken]);
+  }, [isOpen, currentUser?.uid]);
 
   // Export state
   const [exporting, setExporting] = useState(false);
@@ -89,20 +91,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   if (!isOpen) return null;
 
   const handleUpdatePrivacy = async () => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setSavingPrivacy(true);
     setPrivacySuccess(null);
 
     try {
-      const res = await fetch('/api/user/profile', {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({ visibility }),
-      });
-      if (!res.ok) throw new Error('Failed to update privacy');
+      await updateUserProfileFs(currentUser.uid, { visibility });
       await refreshOverview();
       setPrivacySuccess('Default privacy setting saved.');
       setTimeout(() => setPrivacySuccess(null), 3000);
@@ -114,35 +108,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handlePlaceVisibilityChange = async (place: PlaceWithConnection, nextVisibility: VisibilitySetting) => {
-    if (!idToken || nextVisibility === place.visibility) return;
+    if (!currentUser?.uid || nextVisibility === place.visibility) return;
     setSavingPlaceConnectionId(place.connectionId);
     setPrivacyRecordsError(null);
     try {
-      const res = await fetch(`/api/places/${place.connectionId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          name: place.name,
-          country: place.country,
-          stateRegion: place.stateRegion,
-          districtLga: place.districtLga,
-          townCity: place.townCity,
-          villageLocality: place.villageLocality,
-          placeType: place.placeType,
-          connectionType: place.connectionType,
-          humanLabel: place.humanLabel,
-          isCurrent: place.isCurrent,
-          notes: place.notes,
-          visibility: nextVisibility,
-        }),
+      await updatePlaceConnectionFs(currentUser.uid, place.connectionId, {
+        name: place.name,
+        country: place.country,
+        stateRegion: place.stateRegion,
+        districtLga: place.districtLga,
+        townCity: place.townCity,
+        villageLocality: place.villageLocality,
+        placeType: place.placeType,
+        connectionType: place.connectionType,
+        humanLabel: place.humanLabel,
+        isCurrent: place.isCurrent,
+        notes: place.notes,
+        visibility: nextVisibility,
       });
-      if (!res.ok) {
-        const result = await res.json().catch(() => ({}));
-        throw new Error(result.error || 'Could not update this place sharing setting.');
-      }
       setPlaceConnections((current) => current.map((item) => (
         item.connectionId === place.connectionId ? { ...item, visibility: nextVisibility } : item
       )));
@@ -171,15 +154,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleExportData = async () => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setExporting(true);
     setExportSuccess(null);
     try {
-      const res = await fetch('/api/user/export', {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (!res.ok) throw new Error('Export failed');
-      const blob = await res.blob();
+      const exportData = await exportUserDataFs(currentUser.uid);
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -431,7 +411,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div>
                 <h4 className="text-sm font-bold text-slate-900">Your Account Details</h4>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Core identity record stored in Cloud SQL.
+                  Core identity record stored in Cloud Firestore.
                 </p>
               </div>
 
@@ -466,7 +446,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span className="text-slate-500 font-medium">Database Persistence</span>
                   <span className="inline-flex items-center text-slate-600 font-medium space-x-1">
                     <Database className="w-3 h-3 text-emerald-600" />
-                    <span>Cloud SQL (europe-west2)</span>
+                    <span>Cloud Firestore</span>
                   </span>
                 </div>
               </div>

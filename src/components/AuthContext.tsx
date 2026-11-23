@@ -1,11 +1,17 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
   User,
+  createUserWithEmailAndPassword,
   onAuthStateChanged,
+  sendEmailVerification,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
   signInWithPopup,
   signOut as fbSignOut,
+  updateProfile,
 } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase.ts';
+import { ensureUserDocumentFs, getUserOverviewFs } from '../lib/firestore-repo.ts';
 import type { GeoSmartOverview } from '../types.ts';
 import { getOfflineOverview, saveOfflineOverview, setOfflineUserScope } from '../lib/offline-vault.ts';
 
@@ -14,6 +20,7 @@ export interface AppAuthUser {
   email: string | null;
   displayName: string | null;
   photoURL?: string | null;
+  emailVerified?: boolean;
   getIdToken?: () => Promise<string>;
 }
 
@@ -21,6 +28,7 @@ interface AuthContextType {
   currentUser: AppAuthUser | User | null;
   idToken: string | null;
   loading: boolean;
+  emailVerificationRequired: boolean;
   serviceError: string | null;
   userOverview: GeoSmartOverview | null;
   refreshOverview: () => Promise<void>;
@@ -28,100 +36,80 @@ interface AuthContextType {
   signInWithEmail: (email: string, pass: string) => Promise<void>;
   signUpWithEmail: (email: string, pass: string, name?: string) => Promise<void>;
   resetPassword: (email: string) => Promise<void>;
+  resendVerificationEmail: () => Promise<void>;
+  checkVerification: () => Promise<boolean>;
   signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const LOCAL_SESSION_KEY = 'geosmart_session';
+const LEGACY_SESSION_KEY = 'geosmart_session';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<AppAuthUser | User | null>(null);
   const [idToken, setIdToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [emailVerificationRequired, setEmailVerificationRequired] = useState(false);
   const [serviceError, setServiceError] = useState<string | null>(null);
   const [userOverview, setUserOverview] = useState<GeoSmartOverview | null>(null);
 
-  const fetchOverview = async (token: string, userId?: string): Promise<boolean> => {
+  const loadVerifiedUserOverview = async (user: User): Promise<boolean> => {
     try {
-      const res = await fetch('/api/user/overview', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setServiceError(null);
-        setUserOverview(data);
-        if (userId) void saveOfflineOverview(userId, data);
-        return true;
-      } else if (res.status === 401) {
-        localStorage.removeItem(LOCAL_SESSION_KEY);
-        setCurrentUser(null);
-        setIdToken(null);
-        setUserOverview(null);
-        setServiceError(null);
-        return false;
-      } else if (res.status === 503) {
-        const data = await res.json().catch(() => ({}));
-        setServiceError(data.error || 'GeoSmart account storage is unavailable.');
-      } else {
-        const data = await res.json().catch(() => ({}));
-        setServiceError(data.error || 'Your account is signed in, but GeoSmart could not load your details. Please try again.');
-      }
+      await ensureUserDocumentFs(user);
+      const data = await getUserOverviewFs(user.uid);
+      setServiceError(null);
+      setUserOverview(data);
+      void saveOfflineOverview(user.uid, data);
+      return true;
     } catch (err) {
-      console.error('Failed to load user overview:', err);
-      const offlineOverview = userId ? await getOfflineOverview<GeoSmartOverview>(userId) : null;
-      if (offlineOverview) {
+      console.error('Failed to load Firestore user overview:', err);
+      const offlineOverview = await getOfflineOverview<GeoSmartOverview>(user.uid);
+      if (offlineOverview && !navigator.onLine) {
         setUserOverview(offlineOverview);
         setServiceError(null);
         return true;
       }
-      setServiceError('Your account is signed in, but GeoSmart could not load your details. Check your connection and try again.');
+      const message =
+        err instanceof Error
+          ? err.message
+          : 'Your account is signed in, but GeoSmart could not load your details. Check your connection and try again.';
+      setServiceError(message);
+      return false;
     }
-    return false;
   };
 
   const refreshOverview = async () => {
-    if (idToken) {
+    const fbUser = auth.currentUser;
+    if (fbUser && fbUser.emailVerified) {
       setServiceError(null);
-      await fetchOverview(idToken, currentUser?.uid);
+      await loadVerifiedUserOverview(fbUser);
     }
   };
 
   useEffect(() => {
-    // 1. Check local session (from email/password login)
-    let hasLocalSession = false;
-    const stored = localStorage.getItem(LOCAL_SESSION_KEY);
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        if (parsed?.token && parsed?.user) {
-          hasLocalSession = true;
-          setOfflineUserScope(parsed.user.uid);
-          setCurrentUser(parsed.user);
-          setIdToken(parsed.token);
-          fetchOverview(parsed.token, parsed.user.uid).finally(() => {
-            setLoading(false);
-          });
-        }
-      } catch {
-        localStorage.removeItem(LOCAL_SESSION_KEY);
-      }
-    }
+    localStorage.removeItem(LEGACY_SESSION_KEY);
 
-    // 2. Listen to Firebase Google Auth state
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
-        localStorage.removeItem(LOCAL_SESSION_KEY);
         setOfflineUserScope(user.uid);
         setCurrentUser(user);
+
+        if (!user.emailVerified) {
+          setEmailVerificationRequired(true);
+          setIdToken(null);
+          setUserOverview(null);
+          setServiceError(null);
+          setLoading(false);
+          return;
+        }
+
+        setEmailVerificationRequired(false);
         try {
-          // Reuse Firebase's valid cached token when offline; the SDK refreshes
-          // it automatically when needed and a connection is available.
           const token = await user.getIdToken();
           setIdToken(token);
-          await fetchOverview(token, user.uid);
+          await loadVerifiedUserOverview(user);
         } catch (error) {
-          console.error('Error fetching token:', error);
+          console.error('Error initializing signed-in user session:', error);
           const offlineOverview = await getOfflineOverview<GeoSmartOverview>(user.uid);
           if (offlineOverview) {
             setUserOverview(offlineOverview);
@@ -131,15 +119,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
         }
         setLoading(false);
-      } else if (!hasLocalSession) {
-        // Only clear if we don't have an active email/password session
-        const currentStored = localStorage.getItem(LOCAL_SESSION_KEY);
-        if (!currentStored) {
-          setOfflineUserScope(null);
-          setIdToken(null);
-          setUserOverview(null);
-          setCurrentUser(null);
-        }
+      } else {
+        setOfflineUserScope(null);
+        setCurrentUser(null);
+        setIdToken(null);
+        setEmailVerificationRequired(false);
+        setUserOverview(null);
+        setServiceError(null);
         setLoading(false);
       }
     });
@@ -152,66 +138,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const handleSignInWithEmail = async (email: string, pass: string) => {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password: pass }),
-    });
-
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Failed to sign in. Please verify your email and password.');
+    const cred = await signInWithEmailAndPassword(auth, email.trim(), pass);
+    if (!cred.user.emailVerified) {
+      setEmailVerificationRequired(true);
     }
-
-    const appUser: AppAuthUser = {
-      uid: data.user.uid,
-      email: data.user.email,
-      displayName: data.user.displayName,
-      photoURL: null,
-      getIdToken: async () => data.token,
-    };
-
-    localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ token: data.token, user: appUser }));
-    setOfflineUserScope(appUser.uid);
-    setCurrentUser(appUser);
-    setIdToken(data.token);
-    await fetchOverview(data.token, appUser.uid);
   };
 
   const handleSignUpWithEmail = async (email: string, pass: string, name?: string) => {
-    const res = await fetch('/api/auth/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password: pass, displayName: name }),
-    });
-
-    const data = await res.json();
-    if (!res.ok) {
-      throw new Error(data.error || 'Failed to register account.');
+    const cred = await createUserWithEmailAndPassword(auth, email.trim(), pass);
+    if (name?.trim()) {
+      await updateProfile(cred.user, { displayName: name.trim() });
     }
-
-    const appUser: AppAuthUser = {
-      uid: data.user.uid,
-      email: data.user.email,
-      displayName: data.user.displayName,
-      photoURL: null,
-      getIdToken: async () => data.token,
-    };
-
-    localStorage.setItem(LOCAL_SESSION_KEY, JSON.stringify({ token: data.token, user: appUser }));
-    setOfflineUserScope(appUser.uid);
-    setCurrentUser(appUser);
-    setIdToken(data.token);
-    await fetchOverview(data.token, appUser.uid);
+    if (!cred.user.emailVerified) {
+      await sendEmailVerification(cred.user);
+      setEmailVerificationRequired(true);
+    }
   };
 
   const handleResetPassword = async (email: string) => {
-    void email;
-    throw new Error('Password reset is not configured for GeoSmart email/password accounts yet. Please use Google sign-in or contact support.');
+    const cleanEmail = email.trim();
+    if (!cleanEmail) {
+      throw new Error('Enter your email address first so we can send a password reset link.');
+    }
+    await sendPasswordResetEmail(auth, cleanEmail);
+  };
+
+  const handleResendVerificationEmail = async () => {
+    const fbUser = auth.currentUser;
+    if (!fbUser) {
+      throw new Error('Please sign in first.');
+    }
+    await sendEmailVerification(fbUser);
+  };
+
+  const handleCheckVerification = async (): Promise<boolean> => {
+    const fbUser = auth.currentUser;
+    if (!fbUser) return false;
+    await fbUser.reload();
+    if (fbUser.emailVerified) {
+      const token = await fbUser.getIdToken(true);
+      setCurrentUser(fbUser);
+      setIdToken(token);
+      setEmailVerificationRequired(false);
+      await loadVerifiedUserOverview(fbUser);
+      return true;
+    }
+    return false;
   };
 
   const handleSignOut = async () => {
-    localStorage.removeItem(LOCAL_SESSION_KEY);
+    localStorage.removeItem(LEGACY_SESSION_KEY);
     try {
       await fbSignOut(auth);
     } catch (err) {
@@ -220,7 +196,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setCurrentUser(null);
     setOfflineUserScope(null);
     setIdToken(null);
+    setEmailVerificationRequired(false);
     setUserOverview(null);
+    setServiceError(null);
   };
 
   return (
@@ -229,6 +207,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         currentUser,
         idToken,
         loading,
+        emailVerificationRequired,
         serviceError,
         userOverview,
         refreshOverview,
@@ -236,6 +215,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         signInWithEmail: handleSignInWithEmail,
         signUpWithEmail: handleSignUpWithEmail,
         resetPassword: handleResetPassword,
+        resendVerificationEmail: handleResendVerificationEmail,
+        checkVerification: handleCheckVerification,
         signOut: handleSignOut,
       }}
     >

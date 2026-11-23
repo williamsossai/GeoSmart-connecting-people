@@ -14,13 +14,20 @@ import {
 import type { RelationshipType } from '../types.ts';
 import { familyGenderOptions, getRelationshipOptions } from '../lib/family-relationships.ts';
 import { ProfileLocationSelector, type ProfileLocationSelection } from './ProfileLocationSelector.tsx';
+import {
+  addCommunityConnectionFs,
+  addFamilyMemberFs,
+  addPlaceConnectionFs,
+  completeOnboardingFs,
+  updateUserProfileFs,
+} from '../lib/firestore-repo.ts';
 
 interface OnboardingModalProps {
   onComplete: () => void;
 }
 
 export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) => {
-  const { idToken, userOverview, refreshOverview } = useAuth();
+  const { currentUser, userOverview, refreshOverview } = useAuth();
   const [currentStep, setCurrentStep] = useState(2); // Step 1 was account creation
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -72,26 +79,19 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
   };
 
   const finishOnboarding = async () => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
+    const uid = currentUser.uid;
     setSaving(true);
     setSaveError(null);
-    const save = async (url: string, method: 'POST' | 'PATCH', body?: unknown) => {
-      const res = await fetch(url, {
-        method,
-        headers: {
-          ...(body ? { 'Content-Type': 'application/json' } : {}),
-          Authorization: `Bearer ${idToken}`,
-        },
-        ...(body ? { body: JSON.stringify(body) } : {}),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Could not save onboarding information (${res.status}).`);
-      }
-    };
     try {
       // 1. Save profile and the selected origin/residence summaries.
-      const profileUpdate: Record<string, string> = {};
+      const profileUpdate: {
+        firstName?: string;
+        lastName?: string;
+        bio?: string;
+        currentResidenceSummary?: string;
+        originSummary?: string;
+      } = {};
       if (firstName || lastName || bio) {
         profileUpdate.firstName = firstName;
         profileUpdate.lastName = lastName;
@@ -99,11 +99,13 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
       }
       if (liveLocation) profileUpdate.currentResidenceSummary = liveLocation.summary;
       if (originLocation) profileUpdate.originSummary = originLocation.summary;
-      if (Object.keys(profileUpdate).length > 0) await save('/api/user/profile', 'PATCH', profileUpdate);
+      if (Object.keys(profileUpdate).length > 0) {
+        await updateUserProfileFs(uid, profileUpdate);
+      }
 
       // 2. Save where I live (Step 4)
       if (liveLocation) {
-        await save('/api/places', 'POST', {
+        await addPlaceConnectionFs(uid, {
           name: liveLocation.name,
           country: liveLocation.country,
           stateRegion: liveLocation.stateRegion,
@@ -117,7 +119,7 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
 
       // 3. Save where I'm from (Step 5)
       if (originLocation) {
-        await save('/api/places', 'POST', {
+        await addPlaceConnectionFs(uid, {
           name: originLocation.name,
           country: originLocation.country,
           stateRegion: originLocation.stateRegion,
@@ -130,45 +132,45 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({ onComplete }) 
 
       // 4. Save family/ancestral place (Step 6)
       if (ancestralPlace.trim() && ancestralCountry.trim()) {
-        await save('/api/places', 'POST', {
-            name: ancestralPlace.trim(),
-            country: ancestralCountry.trim(),
-            connectionType: 'family_ancestral',
-            humanLabel: 'Family/ancestral place',
+        await addPlaceConnectionFs(uid, {
+          name: ancestralPlace.trim(),
+          country: ancestralCountry.trim(),
+          connectionType: 'family_ancestral',
+          humanLabel: 'Family/ancestral place',
         });
       }
 
       // 5. Save family member (Step 7)
       if (famFirstName.trim() && famLastName.trim()) {
-        await save('/api/family', 'POST', {
-            firstName: famFirstName.trim(),
-            lastName: famLastName.trim(),
-            gender: famGender === 'unspecified' ? undefined : famGender,
-            relationshipType: famRelation,
+        await addFamilyMemberFs(uid, {
+          firstName: famFirstName.trim(),
+          lastName: famLastName.trim(),
+          gender: famGender === 'unspecified' ? undefined : famGender,
+          relationshipType: famRelation,
         });
       }
 
       // 6. Save community (Step 8)
       if (commName.trim()) {
-        await save('/api/communities', 'POST', {
-            name: commName.trim(),
-            communityType: commType,
-            connectionType: 'member',
+        await addCommunityConnectionFs(uid, {
+          name: commName.trim(),
+          communityType: commType,
+          connectionType: 'member',
         });
       }
 
       // 7. Save other place (Step 9)
       if (otherPlace.trim() && otherCountry.trim()) {
-        await save('/api/places', 'POST', {
-            name: otherPlace.trim(),
-            country: otherCountry.trim(),
-            connectionType: 'other',
-            humanLabel: 'Connected place',
+        await addPlaceConnectionFs(uid, {
+          name: otherPlace.trim(),
+          country: otherCountry.trim(),
+          connectionType: 'other',
+          humanLabel: 'Connected place',
         });
       }
 
-      // Mark onboarding complete on backend
-      await save('/api/user/onboarding', 'POST');
+      // Mark onboarding complete in Firestore
+      await completeOnboardingFs(uid);
 
       await refreshOverview();
       onComplete();

@@ -13,6 +13,8 @@ import {
 } from 'lucide-react';
 import type { FamilyTreeNode, RelationshipType } from '../types.ts';
 import { familyGenderOptions, getRelationshipLabel, getRelationshipOptions } from '../lib/family-relationships.ts';
+import { useAuth } from './AuthContext.tsx';
+import { createFamilyInvitationFs, updateFamilyRelationshipFs } from '../lib/firestore-repo.ts';
 
 interface FamilyMemberDetailModalProps {
   node: FamilyTreeNode | null;
@@ -25,10 +27,10 @@ interface FamilyMemberDetailModalProps {
 export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = ({
   node,
   onClose,
-  idToken,
   onUpdated,
   onRemove,
 }) => {
+  const { currentUser } = useAuth();
   if (!node) return null;
 
   const isSelf = Boolean(node.isSelf);
@@ -61,30 +63,16 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
   // Generate an invitation code for this family member
   const handleCreateInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setInviting(true);
     setInviteError(null);
 
     try {
-      const res = await fetch('/api/family/invitations', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          personId: node.personId,
-          inviteeEmail: inviteeEmail.trim() || undefined,
-          relationshipType: node.relationshipType,
-        }),
+      const data = await createFamilyInvitationFs(currentUser.uid, {
+        personId: node.personId,
+        inviteeEmail: inviteeEmail.trim(),
+        relationshipType: node.relationshipType,
       });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to generate invitation');
-      }
-
-      const data = await res.json();
       setCreatedInviteCode(data.inviteCode);
       onUpdated();
     } catch (err: any) {
@@ -98,28 +86,16 @@ export const FamilyMemberDetailModal: React.FC<FamilyMemberDetailModalProps> = (
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     const targetId = node.relationshipId || node.personId;
-    if (!idToken || !targetId) return;
+    if (!currentUser?.uid || !targetId) return;
     setSavingEdit(true);
     setEditError(null);
 
     try {
-      const res = await fetch(`/api/family/${targetId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          relationshipType: editRelType,
-          ...(canEditGender ? { gender: editGender } : {}),
-          ...(canEditNotes ? { notes: editNotes.trim() || null } : {}),
-        }),
+      await updateFamilyRelationshipFs(currentUser.uid, targetId, {
+        relationshipType: editRelType,
+        ...(canEditGender ? { gender: editGender } : {}),
+        ...(canEditNotes ? { notes: editNotes.trim() || null } : {}),
       });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to update relationship');
-      }
       setIsEditing(false);
       onUpdated();
     } catch (err: any) {

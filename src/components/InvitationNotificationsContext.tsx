@@ -1,5 +1,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { useAuth } from './AuthContext.tsx';
+import {
+  getFamilyInvitationNotificationStateFs,
+  markFamilyInvitationActivityReadFs,
+  setFamilyInvitationAlertsEnabledFs,
+} from '../lib/firestore-repo.ts';
 
 interface InvitationNotificationState {
   pendingCount: number;
@@ -27,20 +32,18 @@ export const notifyInvitationNotificationsChanged = () => {
 };
 
 export const InvitationNotificationsProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { idToken } = useAuth();
+  const { currentUser, emailVerificationRequired } = useAuth();
   const [state, setState] = useState<InvitationNotificationState>(defaultState);
 
+  const isVerifiedReady = Boolean(currentUser?.uid && !emailVerificationRequired);
+
   const refreshInvitationNotifications = useCallback(async () => {
-    if (!idToken) {
+    if (!currentUser?.uid || emailVerificationRequired) {
       setState(defaultState);
       return;
     }
     try {
-      const response = await fetch('/api/family/invitation-notifications', {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (!response.ok) return;
-      const data = await response.json();
+      const data = await getFamilyInvitationNotificationStateFs(currentUser.uid);
       setState({
         pendingCount: Number(data.pendingCount || 0),
         hasUnreadActivity: Boolean(data.hasUnreadActivity),
@@ -49,11 +52,11 @@ export const InvitationNotificationsProvider: React.FC<{ children: React.ReactNo
     } catch (error) {
       console.error('Failed to refresh invitation notifications:', error);
     }
-  }, [idToken]);
+  }, [currentUser?.uid, emailVerificationRequired]);
 
   useEffect(() => {
     void refreshInvitationNotifications();
-    if (!idToken) return;
+    if (!isVerifiedReady) return;
     const intervalId = window.setInterval(() => void refreshInvitationNotifications(), 30_000);
     const onFocus = () => void refreshInvitationNotifications();
     const onChanged = () => void refreshInvitationNotifications();
@@ -64,37 +67,25 @@ export const InvitationNotificationsProvider: React.FC<{ children: React.ReactNo
       window.removeEventListener('focus', onFocus);
       window.removeEventListener(INVITATION_NOTIFICATIONS_CHANGED, onChanged);
     };
-  }, [idToken, refreshInvitationNotifications]);
+  }, [isVerifiedReady, refreshInvitationNotifications]);
 
   const markInvitationActivityRead = useCallback(async () => {
-    if (!idToken) return;
+    if (!currentUser?.uid || emailVerificationRequired) return;
     try {
-      const response = await fetch('/api/family/invitation-notifications/read', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (!response.ok) throw new Error('Failed to clear invitation activity.');
-      const data = await response.json();
-      setState((current) => ({ ...current, ...data }));
+      await markFamilyInvitationActivityReadFs(currentUser.uid);
+      setState((current) => ({ ...current, hasUnreadActivity: false }));
     } catch (error) {
       console.error('Failed to clear invitation activity:', error);
     }
-  }, [idToken]);
+  }, [currentUser?.uid, emailVerificationRequired]);
 
   const updateInvitationAlerts = useCallback(async (enabled: boolean) => {
-    if (!idToken) throw new Error('Sign in to update invitation alerts.');
-    const response = await fetch('/api/family/invitation-notifications', {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${idToken}`,
-      },
-      body: JSON.stringify({ alertsEnabled: enabled }),
-    });
-    if (!response.ok) throw new Error('Failed to update invitation alerts.');
-    const data = await response.json();
-    setState((current) => ({ ...current, ...data }));
-  }, [idToken]);
+    if (!currentUser?.uid || emailVerificationRequired) {
+      throw new Error('Sign in with a verified email to update invitation alerts.');
+    }
+    await setFamilyInvitationAlertsEnabledFs(currentUser.uid, enabled);
+    setState((current) => ({ ...current, alertsEnabled: enabled }));
+  }, [currentUser?.uid, emailVerificationRequired]);
 
   return (
     <InvitationNotificationsContext.Provider value={{

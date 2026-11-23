@@ -2,6 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { X, Mail, Copy, Check, Clock, CheckCircle2, AlertCircle, RefreshCw, KeyRound, ArrowRight } from 'lucide-react';
 import type { FamilyInvitationRecord, KinshipDiscoveryMatch } from '../types.ts';
 import { getRelationshipLabel } from '../lib/family-relationships.ts';
+import { useAuth } from './AuthContext.tsx';
+import {
+  acceptFamilyInvitationByCodeFs,
+  claimDiscoveredPersonFs,
+  getKinshipDiscoverySuggestionsFs,
+  getSentFamilyInvitationsFs,
+} from '../lib/firestore-repo.ts';
 
 interface FamilyInvitationsModalProps {
   isOpen: boolean;
@@ -15,11 +22,11 @@ interface FamilyInvitationsModalProps {
 export const FamilyInvitationsModal: React.FC<FamilyInvitationsModalProps> = ({
   isOpen,
   onClose,
-  idToken,
   onSuccess,
   onOpened,
   embedded = false,
 }) => {
+  const { currentUser } = useAuth();
   const [invitations, setInvitations] = useState<FamilyInvitationRecord[]>([]);
   const [receivedInvitations, setReceivedInvitations] = useState<KinshipDiscoveryMatch[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,31 +41,24 @@ export const FamilyInvitationsModal: React.FC<FamilyInvitationsModalProps> = ({
   const [claimingInvitationId, setClaimingInvitationId] = useState<number | null>(null);
 
   const fetchInvitations = async () => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/family/invitations', {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setInvitations(data);
-      }
-      const discoveryRes = await fetch('/api/family/discovery', {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (discoveryRes.ok) {
-        setReceivedInvitations(await discoveryRes.json());
+      const [sent, discovery] = await Promise.all([
+        getSentFamilyInvitationsFs(currentUser.uid),
+        getKinshipDiscoverySuggestionsFs(currentUser.uid),
+      ]);
+      setInvitations(sent);
+      if (discovery.emailVerified) {
+        setReceivedInvitations(discovery.suggestions);
         setDiscoveryError(null);
-      } else if (discoveryRes.status === 403) {
-        setReceivedInvitations([]);
-        setDiscoveryError('Verify your email address to view invitations sent to you.');
       } else {
         setReceivedInvitations([]);
-        setDiscoveryError('Could not load invitations sent to you.');
+        setDiscoveryError('Verify your email address to view invitations sent to you.');
       }
     } catch (err) {
       console.error('Failed to load invitations:', err);
+      setDiscoveryError('Could not load invitations sent to you.');
     } finally {
       setLoading(false);
     }
@@ -72,7 +72,7 @@ export const FamilyInvitationsModal: React.FC<FamilyInvitationsModalProps> = ({
       setRedeemSuccess(null);
       setRedeemError(null);
     }
-  }, [isOpen, idToken, onOpened]);
+  }, [isOpen, currentUser?.uid, onOpened]);
 
   if (!isOpen) return null;
 
@@ -83,22 +83,11 @@ export const FamilyInvitationsModal: React.FC<FamilyInvitationsModalProps> = ({
   };
 
   const handleClaimInvitation = async (invitationId: number) => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setClaimingInvitationId(invitationId);
     setRedeemError(null);
     try {
-      const response = await fetch('/api/family/claim', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({ invitationId }),
-      });
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.error || 'Failed to accept invitation.');
-      }
+      await claimDiscoveredPersonFs(currentUser.uid, invitationId);
       setReceivedInvitations((current) => current.filter((invitation) => invitation.invitationId !== invitationId));
       await fetchInvitations();
       await onSuccess?.();
@@ -111,26 +100,13 @@ export const FamilyInvitationsModal: React.FC<FamilyInvitationsModalProps> = ({
 
   const handleRedeemCode = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!idToken || !manualCode.trim()) return;
+    if (!currentUser?.uid || !manualCode.trim()) return;
     setRedeeming(true);
     setRedeemError(null);
     setRedeemSuccess(null);
 
     try {
-      const res = await fetch('/api/family/invitations/accept', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({ inviteCode: manualCode.trim() }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Invalid or expired invitation code');
-      }
-
+      await acceptFamilyInvitationByCodeFs(currentUser.uid, manualCode.trim());
       setRedeemSuccess('Invitation accepted! Your family tree connection has been linked.');
       setManualCode('');
       await fetchInvitations();

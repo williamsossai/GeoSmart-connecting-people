@@ -1,0 +1,973 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Private user account, core person identity, profile details, and notification preferences (PII isolated to owner or admin).",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer",
+          "description": "Deterministic positive integer ID for UI compatibility"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Account email address",
+          "minLength": 3,
+          "maxLength": 254,
+          "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Display name",
+          "maxLength": 120
+        },
+        "firstName": {
+          "type": "string",
+          "description": "First name",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "lastName": {
+          "type": "string",
+          "description": "Last name",
+          "maxLength": 80
+        },
+        "otherNames": {
+          "type": "string",
+          "description": "Middle or other names",
+          "maxLength": 120
+        },
+        "gender": {
+          "type": "string",
+          "description": "Gender",
+          "enum": ["female", "male", "non_binary", "another", "unspecified"],
+          "maxLength": 20
+        },
+        "isLiving": {
+          "type": "boolean",
+          "description": "Whether the person is living"
+        },
+        "bio": {
+          "type": "string",
+          "description": "Personal biography",
+          "maxLength": 1500
+        },
+        "currentResidenceSummary": {
+          "type": "string",
+          "description": "Current residence summary",
+          "maxLength": 200
+        },
+        "originSummary": {
+          "type": "string",
+          "description": "Personal origin summary",
+          "maxLength": 200
+        },
+        "visibility": {
+          "type": "string",
+          "description": "Profile visibility level",
+          "enum": ["private", "shared", "public"],
+          "maxLength": 16
+        },
+        "role": {
+          "type": "string",
+          "description": "Authorization role",
+          "enum": ["user", "admin"],
+          "maxLength": 16
+        },
+        "status": {
+          "type": "string",
+          "description": "Account status",
+          "enum": ["active", "suspended"],
+          "maxLength": 16
+        },
+        "onboardingCompleted": {
+          "type": "boolean",
+          "description": "Whether onboarding has been completed"
+        },
+        "alertsEnabled": {
+          "type": "boolean",
+          "description": "Invitation and kinship alert notifications preference"
+        },
+        "activityReadAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when invitation activity was last marked read"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Account creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp"
+        }
+      },
+      "required": [
+        "uid",
+        "numericId",
+        "email",
+        "displayName",
+        "firstName",
+        "lastName",
+        "otherNames",
+        "gender",
+        "isLiving",
+        "bio",
+        "currentResidenceSummary",
+        "originSummary",
+        "visibility",
+        "role",
+        "status",
+        "onboardingCompleted",
+        "alertsEnabled",
+        "activityReadAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "SharedProfile": {
+      "title": "SharedProfile",
+      "description": "Non-PII shareable profile summary for connected family members when profile visibility is shared or public.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "firstName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "lastName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "otherNames": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "gender": {
+          "type": "string",
+          "enum": ["female", "male", "non_binary", "another", "unspecified"],
+          "maxLength": 20
+        },
+        "originSummary": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "currentResidenceSummary": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "placeOfOriginName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "placeOfOriginCountry": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "sharedPlacesCount": {
+          "type": "integer"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["private", "shared", "public"],
+          "maxLength": 16
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "numericId",
+        "displayName",
+        "firstName",
+        "lastName",
+        "otherNames",
+        "gender",
+        "originSummary",
+        "currentResidenceSummary",
+        "placeOfOriginName",
+        "placeOfOriginCountry",
+        "sharedPlacesCount",
+        "visibility",
+        "updatedAt"
+      ]
+    },
+    "PlaceConnection": {
+      "title": "PlaceConnection",
+      "description": "A geographic place connection belonging to a user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "country": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "stateRegion": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "districtLga": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "townCity": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "villageLocality": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "placeType": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "connectionType": {
+          "type": "string",
+          "enum": [
+            "residence",
+            "origin",
+            "family_ancestral",
+            "birthplace",
+            "birth",
+            "childhood",
+            "study",
+            "work",
+            "frequent_visit",
+            "other"
+          ],
+          "maxLength": 32
+        },
+        "humanLabel": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "isCurrent": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 600
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["private", "shared", "public"],
+          "maxLength": 16
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "numericId",
+        "ownerUid",
+        "name",
+        "country",
+        "stateRegion",
+        "districtLga",
+        "townCity",
+        "villageLocality",
+        "placeType",
+        "connectionType",
+        "humanLabel",
+        "isCurrent",
+        "notes",
+        "visibility",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "CommunityConnection": {
+      "title": "CommunityConnection",
+      "description": "A private community or cultural association connection belonging to a user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 140
+        },
+        "communityType": {
+          "type": "string",
+          "enum": [
+            "hometown",
+            "village",
+            "town",
+            "local",
+            "diaspora",
+            "cultural_association",
+            "other"
+          ],
+          "maxLength": 32
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 600
+        },
+        "associatedPlaceName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "associatedPlaceCountry": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "connectionType": {
+          "type": "string",
+          "enum": [
+            "resident",
+            "member",
+            "origin",
+            "ancestral",
+            "ancestral_connection",
+            "family",
+            "family_connection",
+            "marriage",
+            "marriage_connection",
+            "professional",
+            "other"
+          ],
+          "maxLength": 32
+        },
+        "humanLabel": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 600
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["private"],
+          "maxLength": 16
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "numericId",
+        "ownerUid",
+        "name",
+        "communityType",
+        "description",
+        "associatedPlaceName",
+        "associatedPlaceCountry",
+        "connectionType",
+        "humanLabel",
+        "notes",
+        "visibility",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FamilyMemberRecord": {
+      "title": "FamilyMemberRecord",
+      "description": "A relative entry in a user's family tree, optionally linked to a claimed GeoSmart user UID.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "linkedUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "pendingInviteId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "firstName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "lastName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "otherNames": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "gender": {
+          "type": "string",
+          "enum": ["female", "male", "non_binary", "another", "unspecified"],
+          "maxLength": 20
+        },
+        "isLiving": {
+          "type": "boolean"
+        },
+        "relationshipType": {
+          "type": "string",
+          "enum": [
+            "parent",
+            "child",
+            "spouse",
+            "sibling",
+            "grandparent",
+            "grandchild",
+            "relative",
+            "other"
+          ],
+          "maxLength": 24
+        },
+        "inverseRelationshipType": {
+          "type": "string",
+          "enum": [
+            "parent",
+            "child",
+            "spouse",
+            "sibling",
+            "grandparent",
+            "grandchild",
+            "relative",
+            "other"
+          ],
+          "maxLength": 24
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 600
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["private", "shared", "public"],
+          "maxLength": 16
+        },
+        "originPlaceName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "originPlaceCountry": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "numericId",
+        "ownerUid",
+        "linkedUid",
+        "pendingInviteId",
+        "firstName",
+        "lastName",
+        "otherNames",
+        "gender",
+        "isLiving",
+        "relationshipType",
+        "inverseRelationshipType",
+        "notes",
+        "visibility",
+        "originPlaceName",
+        "originPlaceCountry",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FamilyInvitation": {
+      "title": "FamilyInvitation",
+      "description": "Verified-email family tree invitation linking an unclaimed relative entry to an existing user.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "inviterUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "inviterName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "inviterFirstName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "inviterLastName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "inviterGender": {
+          "type": "string",
+          "enum": ["female", "male", "non_binary", "another", "unspecified"],
+          "maxLength": 20
+        },
+        "memberId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "memberNumericId": {
+          "type": "integer"
+        },
+        "personName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "inviteeEmail": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 254,
+          "pattern": "^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$"
+        },
+        "inviteCodeHash": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "relationshipType": {
+          "type": "string",
+          "enum": [
+            "parent",
+            "child",
+            "spouse",
+            "sibling",
+            "grandparent",
+            "grandchild",
+            "relative",
+            "other"
+          ],
+          "maxLength": 24
+        },
+        "gender": {
+          "type": "string",
+          "enum": ["female", "male", "non_binary", "another", "unspecified"],
+          "maxLength": 20
+        },
+        "inviterFamilyCount": {
+          "type": "integer"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "accepted", "expired", "revoked"],
+          "maxLength": 16
+        },
+        "acceptedByUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "acceptedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "numericId",
+        "inviterUid",
+        "inviterName",
+        "inviterFirstName",
+        "inviterLastName",
+        "inviterGender",
+        "memberId",
+        "memberNumericId",
+        "personName",
+        "inviteeEmail",
+        "inviteCodeHash",
+        "relationshipType",
+        "gender",
+        "inviterFamilyCount",
+        "status",
+        "acceptedByUid",
+        "expiresAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ActivityEvent": {
+      "title": "ActivityEvent",
+      "description": "User activity and privacy audit event.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "eventType": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 250
+        },
+        "targetType": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "scope": {
+          "type": "string",
+          "maxLength": 48
+        },
+        "previousVisibility": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "selectedVisibility": {
+          "type": "string",
+          "maxLength": 16
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "numericId",
+        "ownerUid",
+        "eventType",
+        "summary",
+        "targetType",
+        "scope",
+        "previousVisibility",
+        "selectedVisibility",
+        "createdAt"
+      ]
+    },
+    "FamilyStoryRecord": {
+      "title": "FamilyStoryRecord",
+      "description": "Metadata for an audio or video family story.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1200
+        },
+        "mediaType": {
+          "type": "string",
+          "enum": ["audio", "video"],
+          "maxLength": 16
+        },
+        "contentType": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "fileSize": {
+          "type": "integer"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["private", "family"],
+          "maxLength": 16
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "numericId",
+        "ownerUid",
+        "ownerName",
+        "title",
+        "description",
+        "mediaType",
+        "contentType",
+        "fileSize",
+        "visibility",
+        "createdAt"
+      ]
+    },
+    "AdminRole": {
+      "title": "AdminRole",
+      "description": "Trusted admin role assignment.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["uid", "email", "createdAt"]
+    },
+    "AdminAccessLog": {
+      "title": "AdminAccessLog",
+      "description": "Immutable administrative audit log entry.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "adminUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "adminNumericId": {
+          "type": "integer"
+        },
+        "adminEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "targetUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "targetNumericId": {
+          "type": "integer"
+        },
+        "targetAccountCode": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400
+        },
+        "result": {
+          "type": "string",
+          "enum": ["SUCCESS", "DENIED", "ERROR"],
+          "maxLength": 16
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "numericId",
+        "adminUid",
+        "adminNumericId",
+        "adminEmail",
+        "action",
+        "targetUid",
+        "targetNumericId",
+        "targetAccountCode",
+        "reason",
+        "result",
+        "timestamp"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "User accounts and private identity profiles (owner-only or admin)."
+    },
+    "/sharedProfiles/{uid}": {
+      "schema": { "$ref": "#/entities/SharedProfile" },
+      "description": "Non-PII shareable summaries readable by authenticated users only when visibility is shared or public."
+    },
+    "/users/{uid}/places/{placeId}": {
+      "schema": { "$ref": "#/entities/PlaceConnection" },
+      "description": "User place connections."
+    },
+    "/users/{uid}/communities/{communityId}": {
+      "schema": { "$ref": "#/entities/CommunityConnection" },
+      "description": "Private user community connections."
+    },
+    "/users/{uid}/familyMembers/{memberId}": {
+      "schema": { "$ref": "#/entities/FamilyMemberRecord" },
+      "description": "User family member nodes and relationships."
+    },
+    "/users/{uid}/activityEvents/{eventId}": {
+      "schema": { "$ref": "#/entities/ActivityEvent" },
+      "description": "User activity and privacy change history."
+    },
+    "/users/{uid}/stories/{storyId}": {
+      "schema": { "$ref": "#/entities/FamilyStoryRecord" },
+      "description": "User family story metadata."
+    },
+    "/familyInvitations/{inviteId}": {
+      "schema": { "$ref": "#/entities/FamilyInvitation" },
+      "description": "Verified-email family invitations queryable only by inviter or matching verified invitee."
+    },
+    "/admins/{uid}": {
+      "schema": { "$ref": "#/entities/AdminRole" },
+      "description": "Trusted administrator directory (read-only to clients)."
+    },
+    "/adminLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AdminAccessLog" },
+      "description": "Immutable platform administrator audit logs."
+    }
+  }
+}

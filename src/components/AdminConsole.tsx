@@ -16,9 +16,10 @@ import {
   Clock,
   RotateCw,
 } from 'lucide-react';
+import { adminUpdateUserStatusFs, getAdminDashboardDataFs } from '../lib/firestore-repo.ts';
 
 export const AdminConsole: React.FC = () => {
-  const { idToken, userOverview } = useAuth();
+  const { currentUser, userOverview } = useAuth();
   const [metrics, setMetrics] = useState<any>(null);
   const [health, setHealth] = useState<any>(null);
   const [activity, setActivity] = useState<any[]>([]);
@@ -26,7 +27,7 @@ export const AdminConsole: React.FC = () => {
   const [logs, setLogs] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'overview' | 'users' | 'activity' | 'logs'>('overview');
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   // Status modal state
@@ -35,32 +36,15 @@ export const AdminConsole: React.FC = () => {
   const [actionSubmitting, setActionSubmitting] = useState(false);
 
   const fetchAllAdminData = async () => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setRefreshing(true);
     try {
-      const [mRes, hRes, aRes, uRes, lRes] = await Promise.all([
-        fetch('/api/admin/metrics?reason=Admin+Console+Dashboard+Load', {
-          headers: { Authorization: `Bearer ${idToken}` },
-        }),
-        fetch('/api/admin/health', {
-          headers: { Authorization: `Bearer ${idToken}` },
-        }),
-        fetch('/api/admin/activity?limit=40', {
-          headers: { Authorization: `Bearer ${idToken}` },
-        }),
-        fetch(`/api/admin/users?q=${encodeURIComponent(searchQuery)}`, {
-          headers: { Authorization: `Bearer ${idToken}` },
-        }),
-        fetch('/api/admin/logs', {
-          headers: { Authorization: `Bearer ${idToken}` },
-        }),
-      ]);
-
-      if (mRes.ok) setMetrics(await mRes.json());
-      if (hRes.ok) setHealth(await hRes.json());
-      if (aRes.ok) setActivity(await aRes.json());
-      if (uRes.ok) setUsersList(await uRes.json());
-      if (lRes.ok) setLogs(await lRes.json());
+      const data = await getAdminDashboardDataFs(searchQuery);
+      setMetrics(data.metrics);
+      setHealth(data.health);
+      setActivity(data.activity);
+      setUsersList(data.usersList);
+      setLogs(data.logs);
     } catch (err) {
       console.error('Failed to fetch admin data:', err);
     } finally {
@@ -71,43 +55,28 @@ export const AdminConsole: React.FC = () => {
 
   useEffect(() => {
     fetchAllAdminData();
-  }, [idToken]);
+  }, [currentUser?.uid]);
 
   const handleSearchUsers = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     try {
-      const res = await fetch(`/api/admin/users?q=${encodeURIComponent(searchQuery)}`, {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (res.ok) setUsersList(await res.json());
+      const data = await getAdminDashboardDataFs(searchQuery);
+      setUsersList(data.usersList);
     } catch (err) {
       console.error('Search failed:', err);
     }
   };
 
   const handleUpdateStatus = async () => {
-    if (!targetUser || !actionReason.trim() || !idToken) return;
+    if (!targetUser || !actionReason.trim() || !currentUser?.uid) return;
     setActionSubmitting(true);
     const newStatus = targetUser.status === 'active' ? 'suspended' : 'active';
     try {
-      const res = await fetch(`/api/admin/users/${targetUser.id}/status`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          status: newStatus,
-          reason: actionReason.trim(),
-        }),
-      });
-
-      if (res.ok) {
-        setTargetUser(null);
-        setActionReason('');
-        await fetchAllAdminData();
-      }
+      await adminUpdateUserStatusFs(targetUser.uid, targetUser.id, newStatus, actionReason.trim());
+      setTargetUser(null);
+      setActionReason('');
+      await fetchAllAdminData();
     } catch (err) {
       console.error('Status update failed:', err);
     } finally {
@@ -190,7 +159,7 @@ export const AdminConsole: React.FC = () => {
                 <Database className="w-5 h-5" />
               </div>
               <div>
-                <p className="text-xs font-semibold text-slate-500 uppercase">PostgreSQL Database</p>
+                <p className="text-xs font-semibold text-slate-500 uppercase">Cloud Firestore</p>
                 <p className="text-sm font-bold text-slate-900 flex items-center space-x-1.5">
                   <span className={`w-2 h-2 rounded-full ${health?.database === 'healthy' ? 'bg-emerald-500' : 'bg-red-500'}`}></span>
                   <span>{health?.database === 'healthy' ? `Healthy (${health.dbLatencyMs}ms)` : 'Unavailable'}</span>
@@ -488,7 +457,7 @@ export const AdminConsole: React.FC = () => {
                 </div>
                 <div className="flex items-center space-x-3 text-slate-400 text-[11px]">
                   <span>Admin ID: #{l.adminUserId}</span>
-                  <span>{new Date(l.createdAt).toLocaleTimeString()}</span>
+                  <span>{new Date(l.timestamp || l.createdAt).toLocaleTimeString()}</span>
                 </div>
               </div>
             ))}

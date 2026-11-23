@@ -15,6 +15,7 @@ import { SettingsModal } from './components/SettingsModal.tsx';
 import { WorkspaceNavigation } from './components/WorkspaceNavigation.tsx';
 import { InvitationNotificationsProvider } from './components/InvitationNotificationsContext.tsx';
 import { ConnectivityBanner } from './components/ConnectivityBanner.tsx';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import {
   FamilySubView,
   getWorkspacePath,
@@ -22,7 +23,7 @@ import {
   WorkspaceRoute,
   WorkspaceSection,
 } from './lib/workspace-routes.ts';
-import { ShieldCheck, Database } from 'lucide-react';
+import { ShieldCheck, Database, MailCheck } from 'lucide-react';
 
 const readLocation = () => {
   let pathname = window.location.pathname.replace(/\/+$/, '') || '/';
@@ -38,7 +39,17 @@ const readLocation = () => {
 };
 
 const MainAppContent: React.FC = () => {
-  const { currentUser, loading, userOverview, refreshOverview, serviceError } = useAuth();
+  const {
+    currentUser,
+    loading,
+    emailVerificationRequired,
+    userOverview,
+    refreshOverview,
+    serviceError,
+    resendVerificationEmail,
+    checkVerification,
+    signOut,
+  } = useAuth();
   const [locationState, setLocationState] = useState(readLocation);
   const [visitedSections, setVisitedSections] = useState<Set<WorkspaceSection>>(
     () => new Set([readLocation().workspaceRoute.section]),
@@ -47,6 +58,8 @@ const MainAppContent: React.FC = () => {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isEditProfileModalOpen, setIsEditProfileModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [verificationNotice, setVerificationNotice] = useState<string | null>(null);
+  const [verificationBusy, setVerificationBusy] = useState(false);
 
   useEffect(() => {
     const syncRoute = () => {
@@ -81,6 +94,78 @@ const MainAppContent: React.FC = () => {
 
   if (!currentUser) {
     return <AuthModal />;
+  }
+
+  if (emailVerificationRequired) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white rounded-2xl border border-slate-200 p-8 text-center space-y-4 shadow-md">
+          <div className="w-12 h-12 rounded-full bg-sky-50 text-[#05224C] flex items-center justify-center mx-auto">
+            <MailCheck className="w-6 h-6" />
+          </div>
+          <h2 className="text-xl font-bold text-slate-900">Verify your email address</h2>
+          <p className="text-sm text-slate-600 leading-relaxed">
+            We sent a verification link to <span className="font-semibold text-slate-800">{currentUser.email}</span>.
+            Please verify your email to unlock your GeoSmart relationship records.
+          </p>
+          {verificationNotice && (
+            <p className="text-xs rounded-lg bg-sky-50 border border-sky-200 text-sky-900 px-3 py-2">
+              {verificationNotice}
+            </p>
+          )}
+          <div className="flex flex-col space-y-2 pt-2">
+            <button
+              type="button"
+              disabled={verificationBusy}
+              onClick={async () => {
+                setVerificationBusy(true);
+                setVerificationNotice(null);
+                try {
+                  const verified = await checkVerification();
+                  if (!verified) {
+                    setVerificationNotice('Your email is not marked verified yet. Click the link in your inbox and try again.');
+                  }
+                } catch (err: any) {
+                  setVerificationNotice(err?.message || 'Could not refresh verification status.');
+                } finally {
+                  setVerificationBusy(false);
+                }
+              }}
+              className="rounded-lg bg-[#05224C] px-4 py-2.5 text-sm font-medium text-white hover:bg-[#07306b] disabled:opacity-60"
+            >
+              I&apos;ve verified my email — Continue
+            </button>
+            <button
+              type="button"
+              disabled={verificationBusy}
+              onClick={async () => {
+                setVerificationBusy(true);
+                setVerificationNotice(null);
+                try {
+                  await resendVerificationEmail();
+                  setVerificationNotice('Verification email sent. Check your inbox and spam folder.');
+                } catch (err: any) {
+                  setVerificationNotice(err?.message || 'Could not send verification email.');
+                } finally {
+                  setVerificationBusy(false);
+                }
+              }}
+              className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+            >
+              Resend verification email
+            </button>
+            <button
+              type="button"
+              disabled={verificationBusy}
+              onClick={() => void signOut()}
+              className="text-xs font-medium text-slate-500 hover:text-slate-800 pt-1"
+            >
+              Sign out or use another account
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (serviceError) {
@@ -238,7 +323,7 @@ const MainAppContent: React.FC = () => {
           <div className="flex items-center space-x-4 text-[11px] text-slate-400">
             <span className="flex items-center space-x-1">
               <Database className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Cloud SQL · europe-west2</span>
+              <span>Cloud Firestore</span>
             </span>
             <span className="flex items-center space-x-1">
               <ShieldCheck className="w-3.5 h-3.5 text-sky-600" />
@@ -253,14 +338,16 @@ const MainAppContent: React.FC = () => {
 
 export function App() {
   return (
-    <AuthProvider>
-      <InvitationNotificationsProvider>
-        <>
-          <ConnectivityBanner />
-          <MainAppContent />
-        </>
-      </InvitationNotificationsProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <InvitationNotificationsProvider>
+          <>
+            <ConnectivityBanner />
+            <MainAppContent />
+          </>
+        </InvitationNotificationsProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
 

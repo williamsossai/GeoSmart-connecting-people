@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Lock, Mic, Play, Trash2, Upload, Users, Video } from 'lucide-react';
 import { useAuth } from './AuthContext.tsx';
 import type { FamilyStorySummary } from '../types.ts';
+import { deleteFamilyStoryFs, getFamilyStoriesFs } from '../lib/firestore-repo.ts';
 
 const MAX_STORY_BYTES = 50 * 1024 * 1024;
 
@@ -10,10 +11,10 @@ function formatFileSize(bytes: number) {
 }
 
 export const FamilyStoriesView: React.FC = () => {
-  const { idToken } = useAuth();
+  const { currentUser } = useAuth();
   const [stories, setStories] = useState<FamilyStorySummary[]>([]);
   const [storageReady, setStorageReady] = useState(false);
-  const [storageMessage, setStorageMessage] = useState('Checking private media storage…');
+  const [storageMessage, setStorageMessage] = useState('Private media object storage is not configured in this environment.');
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,17 +30,13 @@ export const FamilyStoriesView: React.FC = () => {
   const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const loadStories = async () => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setLoading(true);
     try {
-      const response = await fetch('/api/family/stories', {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Could not load family stories.');
-      setStories(data.stories || []);
-      setStorageReady(Boolean(data.storageReady));
-      setStorageMessage(data.storageMessage || 'Private media storage is ready.');
+      const items = await getFamilyStoriesFs(currentUser.uid);
+      setStories(items);
+      setStorageReady(false);
+      setStorageMessage('Private media storage for audio and video files is not configured in this environment.');
     } catch (loadError: any) {
       setError(loadError.message || 'Could not load family stories.');
     } finally {
@@ -49,7 +46,7 @@ export const FamilyStoriesView: React.FC = () => {
 
   useEffect(() => {
     void loadStories();
-  }, [idToken]);
+  }, [currentUser?.uid]);
 
   useEffect(() => () => {
     if (mediaUrl) URL.revokeObjectURL(mediaUrl);
@@ -57,82 +54,41 @@ export const FamilyStoriesView: React.FC = () => {
 
   const handleUpload = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!idToken || !file) return;
+    if (!currentUser?.uid || !file) return;
     setUploading(true);
     setError(null);
     setNotice(null);
     try {
-      const response = await fetch('/api/family/stories', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${idToken}`,
-          'Content-Type': file.type,
-          'X-Story-Title': encodeURIComponent(title.trim()),
-          'X-Story-Description': encodeURIComponent(description.trim()),
-          'X-Story-Visibility': visibility,
-          'X-Story-Consent': consentConfirmed ? 'true' : 'false',
-        },
-        body: file,
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Could not save this story.');
-      setTitle('');
-      setDescription('');
-      setVisibility('private');
-      setConsentConfirmed(false);
-      setFile(null);
-      setNotice('Your story was saved privately.');
-      await loadStories();
-    } catch (uploadError: any) {
-      setError(uploadError.message || 'Could not save this story.');
+      setError('Private media storage is not configured to store new audio or video files.');
     } finally {
       setUploading(false);
     }
   };
 
   const playStory = async (story: FamilyStorySummary) => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setMediaLoadingId(story.id);
     setError(null);
     try {
-      const response = await fetch(`/api/family/stories/${story.id}/media`, {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || 'Could not load this story.');
-      }
-      const blob = await response.blob();
-      setMediaUrl((current) => {
-        if (current) URL.revokeObjectURL(current);
-        return URL.createObjectURL(blob);
-      });
-      setActiveStoryId(story.id);
-    } catch (playError: any) {
-      setError(playError.message || 'Could not load this story.');
+      setError('Media playback requires configured private media object storage.');
     } finally {
       setMediaLoadingId(null);
     }
   };
 
   const deleteStory = async (story: FamilyStorySummary) => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setDeletingId(story.id);
     setError(null);
     try {
-      const response = await fetch(`/api/family/stories/${story.id}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Could not delete this story.');
+      await deleteFamilyStoryFs(currentUser.uid, story.id);
       if (activeStoryId === story.id) {
         if (mediaUrl) URL.revokeObjectURL(mediaUrl);
         setMediaUrl(null);
         setActiveStoryId(null);
       }
       setStories((current) => current.filter((item) => item.id !== story.id));
-      setNotice('The story and its stored media were deleted.');
+      setNotice('The story record was deleted.');
     } catch (deleteError: any) {
       setError(deleteError.message || 'Could not delete this story.');
     } finally {
@@ -157,7 +113,7 @@ export const FamilyStoriesView: React.FC = () => {
       {!storageReady && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
           <p className="font-semibold">Private media storage needs setup</p>
-          <p className="mt-1 text-xs">{storageMessage} Apply the database migrations and configure the server-only Supabase Storage key to enable uploads.</p>
+          <p className="mt-1 text-xs">{storageMessage} Configure server-side object storage to enable audio and video uploads.</p>
         </div>
       )}
 

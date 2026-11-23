@@ -29,6 +29,12 @@ import { FamilyInvitationsModal } from './FamilyInvitationsModal.tsx';
 import { FamilyStoriesView } from './FamilyStoriesView.tsx';
 import { useInvitationNotifications } from './InvitationNotificationsContext.tsx';
 import { familyGenderOptions, getRelationshipLabel, getRelationshipOptions } from '../lib/family-relationships.ts';
+import {
+  addFamilyMemberFs,
+  getUserFamilyFs,
+  getUserFamilyTreeFs,
+  removeRelationshipFs,
+} from '../lib/firestore-repo.ts';
 
 interface FamilyViewProps {
   activeSubView?: 'overview' | 'tree' | 'invitations' | 'stories';
@@ -79,7 +85,7 @@ const familyOverviewRelationships: Record<FamilyOverviewView, RelationshipType[]
 };
 
 export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubViewChange }) => {
-  const { idToken, refreshOverview } = useAuth();
+  const { currentUser, idToken, refreshOverview } = useAuth();
   const { pendingCount, hasUnreadActivity, alertsEnabled, markInvitationActivityRead, refreshInvitationNotifications } = useInvitationNotifications();
 
   // Sub-view: 'overview' (My Family page with Family Overview) vs 'tree' (visual tree entry point)
@@ -122,26 +128,15 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
 
   // Load Tree & Members
   const loadFamilyData = async () => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setLoading(true);
     try {
-      // 1. Fetch visual tree graph
-      const treeRes = await fetch('/api/family/tree', {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (treeRes.ok) {
-        const tData: FamilyTreeGraph = await treeRes.json();
-        setTreeData(tData);
-      }
-
-      // 2. Fetch flat members list for list mode
-      const listRes = await fetch('/api/family', {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (listRes.ok) {
-        const lData: FamilyMemberWithPerson[] = await listRes.json();
-        setMembers(lData);
-      }
+      const [tData, lData] = await Promise.all([
+        getUserFamilyTreeFs(currentUser.uid),
+        getUserFamilyFs(currentUser.uid),
+      ]);
+      setTreeData(tData);
+      setMembers(lData);
     } catch (err) {
       console.error('Failed to load family data:', err);
       setErrorMsg('Failed to load family connections.');
@@ -152,36 +147,22 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
 
   useEffect(() => {
     loadFamilyData();
-  }, [idToken]);
+  }, [currentUser?.uid]);
 
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setSubmitting(true);
     setErrorMsg(null);
     setSuccessMsg(null);
 
     try {
-      const res = await fetch('/api/family', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          firstName: firstName.trim(),
-          lastName: lastName.trim(),
-          gender,
-          relationshipType,
-        }),
+      await addFamilyMemberFs(currentUser.uid, {
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        gender,
+        relationshipType,
       });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Failed to add family member');
-      }
-
-      await res.json();
 
       await loadFamilyData();
       await refreshOverview();
@@ -201,17 +182,10 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
   };
 
   const executeRemove = async (relationshipIdOrPersonId: number, memberName: string) => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
 
     try {
-      const res = await fetch(`/api/family/${relationshipIdOrPersonId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || 'Failed to remove relationship');
-      }
+      await removeRelationshipFs(currentUser.uid, relationshipIdOrPersonId);
       await loadFamilyData();
       await refreshOverview();
       setSelectedNode(null);

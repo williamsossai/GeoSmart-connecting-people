@@ -17,6 +17,12 @@ import {
   Pencil,
 } from 'lucide-react';
 import type { PlaceConnectionType, PlaceWithConnection, VisibilitySetting } from '../types.ts';
+import {
+  addPlaceConnectionFs,
+  getUserPlacesFs,
+  removePlaceConnectionFs,
+  updatePlaceConnectionFs,
+} from '../lib/firestore-repo.ts';
 
 interface LocationCountryOption { id: number; code: string; name: string }
 interface LocationRegionOption { id: number; code: string; name: string }
@@ -26,7 +32,7 @@ interface LocationPlaceOption { id: number; name: string; country: string; state
 const locationSelectClass = 'w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:ring-2 focus:ring-[#05224C] focus:outline-none disabled:bg-slate-100 disabled:text-slate-500';
 
 export const PlaceView: React.FC = () => {
-  const { idToken, refreshOverview } = useAuth();
+  const { currentUser, refreshOverview } = useAuth();
   const [places, setPlaces] = useState<PlaceWithConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
@@ -69,16 +75,11 @@ export const PlaceView: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
 
   const fetchPlaces = async () => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setLoading(true);
     try {
-      const res = await fetch('/api/places', {
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setPlaces(data);
-      }
+      const data = await getUserPlacesFs(currentUser.uid);
+      setPlaces(data);
     } catch (err) {
       console.error('Failed to load places:', err);
     } finally {
@@ -88,7 +89,7 @@ export const PlaceView: React.FC = () => {
 
   useEffect(() => {
     fetchPlaces();
-  }, [idToken]);
+  }, [currentUser?.uid]);
 
   useEffect(() => {
     if (!showAddModal) return;
@@ -211,37 +212,31 @@ export const PlaceView: React.FC = () => {
 
   const handleAddPlace = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
     setSubmitting(true);
     setErrorMsg(null);
     setSuccessMsg(null);
 
     try {
-      const res = await fetch(editingPlace ? `/api/places/${editingPlace.connectionId}` : '/api/places', {
-        method: editingPlace ? 'PATCH' : 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          name: name.trim(),
-          country: country.trim(),
-          stateRegion: stateRegion.trim() || undefined,
-          districtLga: districtLga.trim() || undefined,
-          townCity: townCity.trim() || undefined,
-          villageLocality: villageLocality.trim() || undefined,
-          placeType: 'geographic_place',
-          connectionType,
-          humanLabel: humanLabel.trim() || undefined,
-          isCurrent,
-          notes: notes.trim() || undefined,
-          visibility,
-        }),
-      });
+      const payload = {
+        name: name.trim(),
+        country: country.trim(),
+        stateRegion: stateRegion.trim() || undefined,
+        districtLga: districtLga.trim() || undefined,
+        townCity: townCity.trim() || undefined,
+        villageLocality: villageLocality.trim() || undefined,
+        placeType: 'geographic_place',
+        connectionType,
+        humanLabel: humanLabel.trim() || undefined,
+        isCurrent,
+        notes: notes.trim() || undefined,
+        visibility,
+      };
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Failed to ${editingPlace ? 'update' : 'add'} place connection`);
+      if (editingPlace) {
+        await updatePlaceConnectionFs(currentUser.uid, editingPlace.connectionId, payload);
+      } else {
+        await addPlaceConnectionFs(currentUser.uid, payload);
       }
 
       await fetchPlaces();
@@ -275,17 +270,10 @@ export const PlaceView: React.FC = () => {
   };
 
   const executeRemove = async (connectionId: number, placeName: string) => {
-    if (!idToken) return;
+    if (!currentUser?.uid) return;
 
     try {
-      const res = await fetch(`/api/places/${connectionId}`, {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${idToken}` },
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || 'Failed to remove place');
-      }
+      await removePlaceConnectionFs(currentUser.uid, connectionId);
       await fetchPlaces();
       await refreshOverview();
       setSuccessMsg(`Disconnected "${placeName}".`);
