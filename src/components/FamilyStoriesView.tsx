@@ -27,7 +27,6 @@ export const FamilyStoriesView: React.FC = () => {
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [mediaLoadingId, setMediaLoadingId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [sharingId, setSharingId] = useState<number | null>(null);
 
   const loadStories = async () => {
     if (!idToken) return;
@@ -82,42 +81,12 @@ export const FamilyStoriesView: React.FC = () => {
       setVisibility('private');
       setConsentConfirmed(false);
       setFile(null);
-      setNotice(visibility === 'family'
-        ? 'Your story was shared with your direct family connections.'
-        : 'Your story was saved privately.');
+      setNotice('Your story was saved privately.');
       await loadStories();
     } catch (uploadError: any) {
       setError(uploadError.message || 'Could not save this story.');
     } finally {
       setUploading(false);
-    }
-  };
-
-  const updateStorySharing = async (story: FamilyStorySummary, nextVisibility: 'private' | 'family') => {
-    if (!idToken || nextVisibility === story.visibility) return;
-    const consentConfirmed = nextVisibility !== 'family' || window.confirm(
-      'Share this recording with your direct GeoSmart family connections? Confirm that everyone living whose voice or image appears has given permission.'
-    );
-    if (!consentConfirmed) return;
-    setSharingId(story.id);
-    setError(null);
-    setNotice(null);
-    try {
-      const response = await fetch(`/api/family/stories/${story.id}/sharing`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
-        body: JSON.stringify({ visibility: nextVisibility, consentConfirmed }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || 'Could not update story sharing.');
-      setStories((current) => current.map((item) => item.id === story.id ? { ...item, visibility: nextVisibility } : item));
-      setNotice(nextVisibility === 'private'
-        ? 'This story is private now. Direct family connections can no longer access it.'
-        : 'This story is now shared with your direct family connections.');
-    } catch (sharingError: any) {
-      setError(sharingError.message || 'Could not update story sharing.');
-    } finally {
-      setSharingId(null);
     }
   };
 
@@ -259,27 +228,10 @@ export const FamilyStoriesView: React.FC = () => {
                       <p className="mt-0.5 text-[11px] text-slate-500">{story.ownerName} · {new Date(story.createdAt).toLocaleDateString()}</p>
                     </div>
                   </div>
-                  {story.isOwner ? (
-                    <label className="sr-only" htmlFor={`story-sharing-${story.id}`}>Sharing for {story.title}</label>
-                  ) : null}
-                  {story.isOwner ? (
-                    <select
-                      id={`story-sharing-${story.id}`}
-                      aria-label={`Sharing for ${story.title}`}
-                      value={story.visibility}
-                      disabled={sharingId === story.id}
-                      onChange={(event) => void updateStorySharing(story, event.target.value as 'private' | 'family')}
-                      className="max-w-36 shrink-0 rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[10px] font-medium text-slate-700 disabled:opacity-60"
-                    >
-                      <option value="private">Private</option>
-                      <option value="family">Share with family</option>
-                    </select>
-                  ) : (
-                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-600">
-                      {story.visibility === 'private' ? <Lock className="h-3 w-3" /> : <Users className="h-3 w-3" />}
-                      {story.visibility === 'private' ? 'Private' : 'Family'}
-                    </span>
-                  )}
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-2 py-1 text-[10px] font-medium text-slate-600">
+                    {story.visibility === 'private' ? <Lock className="h-3 w-3" /> : <Users className="h-3 w-3" />}
+                    {story.visibility === 'private' ? 'Private' : 'Family'}
+                  </span>
                 </div>
                 {story.description && <p className="mt-3 text-xs leading-relaxed text-slate-600">{story.description}</p>}
                 <div className="mt-4 flex items-center justify-between gap-2">

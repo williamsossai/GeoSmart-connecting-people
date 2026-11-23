@@ -4,10 +4,18 @@ import dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
 dotenv.config();
 
-const JWT_SECRET = process.env.SESSION_SECRET;
-if (!JWT_SECRET || Buffer.byteLength(JWT_SECRET, 'utf8') < 32) {
-  throw new Error('SESSION_SECRET must be configured with at least 32 bytes before the server starts.');
+declare global {
+  var _geosmartEphemeralSecret: string | undefined;
 }
+
+const configuredSecret = process.env.SESSION_SECRET;
+const JWT_SECRET =
+  configuredSecret && Buffer.byteLength(configuredSecret, 'utf8') >= 32
+    ? configuredSecret
+    : (globalThis._geosmartEphemeralSecret ??= (() => {
+        console.warn('[AI Studio] SESSION_SECRET not configured — using ephemeral in-memory session secret.');
+        return crypto.randomBytes(32).toString('hex');
+      })());
 
 const JWT_ISSUER = 'geosmart-app';
 const JWT_AUDIENCE = 'geosmart-client';

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
-import { db } from './index.ts';
+import { db, shouldUseMockDatabase } from './index.ts';
+import { mockRepo } from './mock-store.ts';
 import {
   users,
   people,
@@ -7,9 +8,6 @@ import {
   personRelationships,
   families,
   familyMembers,
-  familyGroupInvitations,
-  familyGroupPosts,
-  familyGroupComments,
   places,
   personPlaces,
   communities,
@@ -60,6 +58,7 @@ async function requireManageablePerson(userId: number, personId: number) {
 
 // 1. Get or create user record from Firebase Auth
 export async function getOrCreateUser(uid: string, email: string, displayName?: string | null) {
+  if (await shouldUseMockDatabase()) return mockRepo.getOrCreateUser(uid, email, displayName);
   try {
     // Check if user already exists
     const existing = await db.select().from(users).where(eq(users.uid, uid));
@@ -224,6 +223,7 @@ async function mergeClaimedPersonIntoAccount(
 
 // 3. Get Complete User Overview
 export async function getUserOverview(userId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.getUserOverview(userId);
   try {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     if (!user) {
@@ -377,6 +377,7 @@ export async function updateUserProfile(
     avatarUrl?: string | null;
   }
 ) {
+  if (await shouldUseMockDatabase()) return mockRepo.updateUserProfile(userId, data);
   try {
     const person = await ensureUserPerson(userId, '');
     const [previousProfile] = await db.select().from(profiles).where(eq(profiles.personId, person.id));
@@ -457,6 +458,7 @@ export async function updateUserProfile(
 
 // 5. Complete Onboarding
 export async function completeOnboarding(userId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.completeOnboarding(userId);
   try {
     await db.update(users).set({ onboardingCompleted: true, updatedAt: new Date() }).where(eq(users.id, userId));
     await recordActivityEvent('ONBOARDING_COMPLETED', 'User completed initial onboarding tour', userId, 'user', userId);
@@ -469,6 +471,7 @@ export async function completeOnboarding(userId: number) {
 
 // 6. Places Management
 export async function getUserPlaces(userId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.getUserPlaces(userId);
   try {
     const person = await ensureUserPerson(userId, '');
     const results = await db
@@ -522,6 +525,7 @@ export async function addPlaceConnection(
     forPersonId?: number; // optional: connect for a family member
   }
 ) {
+  if (await shouldUseMockDatabase()) return mockRepo.addPlaceConnection(userId, data);
   try {
     const defaultPerson = await ensureUserPerson(userId, '');
     const targetPersonId = data.forPersonId || defaultPerson.id;
@@ -627,6 +631,7 @@ export async function addPlaceConnection(
 }
 
 export async function removePlaceConnection(userId: number, connectionId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.removePlaceConnection(userId, connectionId);
   try {
     const [deleted] = await db
       .delete(personPlaces)
@@ -670,6 +675,7 @@ export async function updatePlaceConnection(
     visibility?: VisibilitySetting;
   }
 ) {
+  if (await shouldUseMockDatabase()) return mockRepo.updatePlaceConnection(userId, connectionId, data);
   try {
     return await db.transaction(async (tx) => {
       const [connection] = await tx
@@ -750,6 +756,7 @@ export async function updatePlaceConnection(
 
 // 7. Communities Management
 export async function getUserCommunities(userId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.getUserCommunities(userId);
   try {
     const person = await ensureUserPerson(userId, '');
     const results = await db
@@ -795,6 +802,7 @@ export async function addCommunityConnection(
     visibility?: VisibilitySetting;
   }
 ) {
+  if (await shouldUseMockDatabase()) return mockRepo.addCommunityConnection(userId, data);
   try {
     const person = await ensureUserPerson(userId, '');
 
@@ -888,6 +896,7 @@ export async function addCommunityConnection(
 }
 
 export async function removeCommunityConnection(userId: number, connectionId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.removeCommunityConnection(userId, connectionId);
   try {
     const [deleted] = await db
       .delete(personCommunities)
@@ -1086,6 +1095,7 @@ export async function consolidateFamilyConnections(userId: number) {
 }
 
 export async function getUserFamily(userId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.getUserFamily(userId);
   try {
     const userPerson = await ensureUserPerson(userId, '');
 
@@ -1219,335 +1229,8 @@ export async function getUserFamily(userId: number) {
   }
 }
 
-export async function getUserFamilyGroups(userId: number) {
-  const groups = await db.selectDistinct({
-    id: families.id,
-    name: families.name,
-    description: families.description,
-    createdByUserId: families.createdByUserId,
-    createdAt: families.createdAt,
-  }).from(families)
-    .leftJoin(familyGroupInvitations, and(
-      eq(familyGroupInvitations.groupId, families.id),
-      eq(familyGroupInvitations.inviteeUserId, userId),
-      eq(familyGroupInvitations.status, 'accepted'),
-    ))
-    .where(or(eq(families.createdByUserId, userId), eq(familyGroupInvitations.inviteeUserId, userId)))
-    .orderBy(desc(families.createdAt));
-
-  return Promise.all(groups.map(async (group) => {
-    const isOwner = group.createdByUserId === userId;
-    const ownerRows = await db.select({ id: users.id, displayName: users.displayName, createdAt: families.createdAt })
-      .from(families).innerJoin(users, eq(families.createdByUserId, users.id))
-      .where(eq(families.id, group.id));
-    const inviteRows = await db.select({
-      invitationId: familyGroupInvitations.id,
-      status: familyGroupInvitations.status,
-      relationshipType: familyGroupInvitations.relationshipType,
-      invitedAt: familyGroupInvitations.createdAt,
-      acceptedAt: familyGroupInvitations.acceptedAt,
-      userId: users.id,
-      displayName: users.displayName,
-      firstName: people.firstName,
-      lastName: people.lastName,
-      personId: people.id,
-    }).from(familyGroupInvitations)
-      .innerJoin(users, eq(familyGroupInvitations.inviteeUserId, users.id))
-      .innerJoin(people, eq(familyGroupInvitations.personId, people.id))
-      .where(and(
-        eq(familyGroupInvitations.groupId, group.id),
-        or(
-          eq(familyGroupInvitations.status, 'accepted'),
-          ...(isOwner ? [and(eq(familyGroupInvitations.status, 'pending'), gt(familyGroupInvitations.expiresAt, new Date()))] : []),
-        ),
-      ));
-    const owner = ownerRows[0];
-    const members = [
-      ...(owner ? [{ userId: owner.id, name: owner.displayName || 'Group organiser', personId: null, relationshipType: 'self', joinedAt: owner.createdAt.toISOString(), status: 'accepted' as const, isOrganizer: true, isCurrentUser: owner.id === userId }] : []),
-      ...inviteRows.map((invite) => ({
-        userId: invite.userId,
-        name: invite.displayName || `${invite.firstName} ${invite.lastName}`.trim() || 'Family member',
-        personId: invite.personId,
-        relationshipType: invite.relationshipType,
-        joinedAt: (invite.acceptedAt || invite.invitedAt).toISOString(),
-        status: invite.status as 'pending' | 'accepted',
-        isOrganizer: false,
-        isCurrentUser: invite.userId === userId,
-      })),
-    ];
-    return {
-      id: group.id,
-      name: group.name,
-      description: group.description,
-      createdAt: group.createdAt.toISOString(),
-      isOwner,
-      members,
-    };
-  }));
-}
-
-export async function createUserFamilyGroup(userId: number, input: { name: string; description?: string | null; personIds: number[] }) {
-  const name = input.name.trim();
-  if (!name || name.length > 100) throw new Error('Enter a group name up to 100 characters.');
-  const description = input.description?.trim() || null;
-  if (description && description.length > 1000) throw new Error('Group description must be 1,000 characters or fewer.');
-
-  await ensureUserPerson(userId, '');
-  const family = await getUserFamily(userId);
-  const familyByPersonId = new Map(family.map((member) => [member.personId, member]));
-  const selectedIds = [...new Set(input.personIds)];
-  if (selectedIds.length === 0) throw new Error('Choose at least one family member to invite.');
-  if (selectedIds.some((personId) => !familyByPersonId.has(personId))) {
-    throw new Error('Groups can invite only people already connected to your family.');
-  }
-  const selectedMembers = selectedIds.map((personId) => familyByPersonId.get(personId)!);
-  if (selectedMembers.some((member) => !member.userId || member.userId === userId)) {
-    throw new Error('Every group participant needs a GeoSmart account. Invite relatives to GeoSmart first, then add them to a group.');
-  }
-
-  const group = await db.transaction(async (tx) => {
-    const [created] = await tx.insert(families).values({
-      name,
-      description,
-      visibility: 'private',
-      createdByUserId: userId,
-    }).returning({ id: families.id, name: families.name, description: families.description, createdAt: families.createdAt });
-
-    await tx.insert(familyGroupInvitations).values(selectedMembers.map((member) => ({
-      groupId: created.id,
-      inviterUserId: userId,
-      inviteeUserId: member.userId!,
-      personId: member.personId,
-      relationshipType: member.relationshipType,
-      status: 'pending',
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-    })));
-    return created;
-  });
-
-  await recordActivityEvent('FAMILY_GROUP_CREATED', `Created family group: ${name}`, userId, 'family_group', group.id, { invitationCount: selectedIds.length });
-  return { id: group.id };
-}
-
-export async function updateUserFamilyGroup(userId: number, groupId: number, input: { name: string; description?: string | null }) {
-  const name = input.name.trim();
-  const description = input.description?.trim() || null;
-  if (!name || name.length > 100) throw new Error('Enter a group name up to 100 characters.');
-  if (description && description.length > 1000) throw new Error('Group description must be 1,000 characters or fewer.');
-  const [updated] = await db.update(families).set({ name, description })
-    .where(and(eq(families.id, groupId), eq(families.createdByUserId, userId)))
-    .returning({ id: families.id, name: families.name });
-  if (!updated) throw new Error('Only the group organiser can rename this group.');
-  await recordActivityEvent('FAMILY_GROUP_UPDATED', `Updated family group: ${name}`, userId, 'family_group', groupId);
-  return { success: true, name: updated.name };
-}
-
-export async function deleteUserFamilyGroup(userId: number, groupId: number) {
-  const [deleted] = await db.delete(families).where(and(
-    eq(families.id, groupId),
-    eq(families.createdByUserId, userId),
-  )).returning({ id: families.id, name: families.name });
-  if (!deleted) throw new Error('Group not found or permission denied.');
-  await recordActivityEvent('FAMILY_GROUP_DELETED', `Deleted family group: ${deleted.name}`, userId, 'family_group', deleted.id);
-  return { success: true };
-}
-
-export async function inviteToFamilyGroup(userId: number, groupId: number, personId: number) {
-  const [group] = await db.select({ id: families.id, name: families.name })
-    .from(families)
-    .where(and(eq(families.id, groupId), eq(families.createdByUserId, userId)));
-  if (!group) throw new Error('Only the group organiser can invite members.');
-  const family = await getUserFamily(userId);
-  const person = family.find((member) => member.personId === personId);
-  if (!person?.userId || person.userId === userId) throw new Error('Choose a connected relative with a GeoSmart account.');
-
-  const [existing] = await db.select().from(familyGroupInvitations)
-    .where(and(
-      eq(familyGroupInvitations.groupId, groupId),
-      eq(familyGroupInvitations.inviteeUserId, person.userId),
-    ))
-    .orderBy(desc(familyGroupInvitations.createdAt))
-    .limit(1);
-  if (existing?.status === 'accepted') throw new Error('This person is already a member of the group.');
-  if (existing?.status === 'pending' && existing.expiresAt > new Date()) throw new Error('An invitation is already pending for this person.');
-
-  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-  if (existing) {
-    await db.update(familyGroupInvitations).set({
-      inviterUserId: userId,
-      personId,
-      relationshipType: person.relationshipType,
-      status: 'pending',
-      expiresAt,
-      createdAt: new Date(),
-      acceptedAt: null,
-    }).where(eq(familyGroupInvitations.id, existing.id));
-  } else {
-    await db.insert(familyGroupInvitations).values({
-      groupId,
-      inviterUserId: userId,
-      inviteeUserId: person.userId,
-      personId,
-      relationshipType: person.relationshipType,
-      status: 'pending',
-      expiresAt,
-    });
-  }
-  await recordActivityEvent('FAMILY_GROUP_INVITATION_SENT', `Invited a relative to ${group.name}`, userId, 'family_group', groupId);
-  return { success: true };
-}
-
-export async function getIncomingFamilyGroupInvitations(userId: number) {
-  const invitations = await db.select({
-    id: familyGroupInvitations.id,
-    groupId: families.id,
-    groupName: families.name,
-    groupDescription: families.description,
-    inviterUserId: users.id,
-    inviterName: users.displayName,
-    createdAt: familyGroupInvitations.createdAt,
-    expiresAt: familyGroupInvitations.expiresAt,
-  }).from(familyGroupInvitations)
-    .innerJoin(families, eq(familyGroupInvitations.groupId, families.id))
-    .innerJoin(users, eq(familyGroupInvitations.inviterUserId, users.id))
-    .where(and(
-      eq(familyGroupInvitations.inviteeUserId, userId),
-      eq(familyGroupInvitations.status, 'pending'),
-      gt(familyGroupInvitations.expiresAt, new Date()),
-    ))
-    .orderBy(desc(familyGroupInvitations.createdAt));
-  return invitations.map((invitation) => ({
-    ...invitation,
-    inviterName: invitation.inviterName || 'A family member',
-    createdAt: invitation.createdAt.toISOString(),
-    expiresAt: invitation.expiresAt.toISOString(),
-  }));
-}
-
-export async function respondToFamilyGroupInvitation(userId: number, invitationId: number, accept: boolean) {
-  const [invitation] = await db.select({ id: familyGroupInvitations.id, groupId: familyGroupInvitations.groupId })
-    .from(familyGroupInvitations)
-    .where(and(
-      eq(familyGroupInvitations.id, invitationId),
-      eq(familyGroupInvitations.inviteeUserId, userId),
-      eq(familyGroupInvitations.status, 'pending'),
-      gt(familyGroupInvitations.expiresAt, new Date()),
-    ));
-  if (!invitation) throw new Error('Invitation is no longer available.');
-  const now = new Date();
-  await db.update(familyGroupInvitations)
-    .set({ status: accept ? 'accepted' : 'declined', acceptedAt: accept ? now : null })
-    .where(eq(familyGroupInvitations.id, invitationId));
-  await recordActivityEvent(
-    accept ? 'FAMILY_GROUP_INVITATION_ACCEPTED' : 'FAMILY_GROUP_INVITATION_DECLINED',
-    accept ? 'Joined a family group' : 'Declined a family group invitation',
-    userId,
-    'family_group',
-    invitation.groupId,
-  );
-  return { success: true, accepted: accept };
-}
-
-export async function removeFamilyGroupMember(actorUserId: number, groupId: number, targetUserId: number) {
-  const [group] = await db.select({ id: families.id, name: families.name, createdByUserId: families.createdByUserId })
-    .from(families).where(eq(families.id, groupId));
-  if (!group) throw new Error('Family group not found.');
-  if (targetUserId === group.createdByUserId) throw new Error('The organiser cannot leave this group. Delete the group if you no longer want to run it.');
-  const isOrganizer = actorUserId === group.createdByUserId;
-  if (!isOrganizer && actorUserId !== targetUserId) throw new Error('Only the organiser can remove another member.');
-  const [membership] = await db.select({ id: familyGroupInvitations.id, status: familyGroupInvitations.status })
-    .from(familyGroupInvitations)
-    .where(and(
-      eq(familyGroupInvitations.groupId, groupId),
-      eq(familyGroupInvitations.inviteeUserId, targetUserId),
-      inArray(familyGroupInvitations.status, ['pending', 'accepted']),
-    ))
-    .orderBy(desc(familyGroupInvitations.createdAt))
-    .limit(1);
-  if (!membership) throw new Error('This person is not an active group member or invitee.');
-  await db.update(familyGroupInvitations).set({ status: 'revoked' }).where(eq(familyGroupInvitations.id, membership.id));
-  await recordActivityEvent(
-    isOrganizer ? 'FAMILY_GROUP_MEMBER_REMOVED' : 'FAMILY_GROUP_MEMBER_LEFT',
-    isOrganizer ? 'Removed a member from a family group' : 'Left a family group',
-    actorUserId,
-    'family_group',
-    groupId,
-    { targetUserId },
-  );
-  return { success: true, groupName: group.name };
-}
-
-async function requireFamilyGroupMember(userId: number, groupId: number) {
-  const [owned] = await db.select({ id: families.id }).from(families)
-    .where(and(eq(families.id, groupId), eq(families.createdByUserId, userId)));
-  if (owned) return;
-  const [membership] = await db.select({ id: familyGroupInvitations.id }).from(familyGroupInvitations)
-    .where(and(
-      eq(familyGroupInvitations.groupId, groupId),
-      eq(familyGroupInvitations.inviteeUserId, userId),
-      eq(familyGroupInvitations.status, 'accepted'),
-    ));
-  if (!membership) throw new Error('You are not a member of this family group.');
-}
-
-export async function getFamilyGroupPosts(userId: number, groupId: number) {
-  await requireFamilyGroupMember(userId, groupId);
-  const posts = await db.select({
-    id: familyGroupPosts.id,
-    body: familyGroupPosts.body,
-    createdAt: familyGroupPosts.createdAt,
-    authorUserId: users.id,
-    authorName: users.displayName,
-  }).from(familyGroupPosts)
-    .innerJoin(users, eq(familyGroupPosts.authorUserId, users.id))
-    .where(eq(familyGroupPosts.groupId, groupId))
-    .orderBy(desc(familyGroupPosts.createdAt));
-  if (!posts.length) return [];
-  const comments = await db.select({
-    id: familyGroupComments.id,
-    postId: familyGroupComments.postId,
-    body: familyGroupComments.body,
-    createdAt: familyGroupComments.createdAt,
-    authorUserId: users.id,
-    authorName: users.displayName,
-  }).from(familyGroupComments)
-    .innerJoin(users, eq(familyGroupComments.authorUserId, users.id))
-    .where(inArray(familyGroupComments.postId, posts.map((post) => post.id)))
-    .orderBy(familyGroupComments.createdAt);
-  return posts.map((post) => ({
-    ...post,
-    authorName: post.authorName || 'Group member',
-    createdAt: post.createdAt.toISOString(),
-    comments: comments.filter((comment) => comment.postId === post.id).map((comment) => ({
-      ...comment,
-      authorName: comment.authorName || 'Group member',
-      createdAt: comment.createdAt.toISOString(),
-    })),
-  }));
-}
-
-export async function createFamilyGroupPost(userId: number, groupId: number, body: string) {
-  await requireFamilyGroupMember(userId, groupId);
-  const content = body.trim();
-  if (!content || content.length > 5000) throw new Error('Write a post up to 5,000 characters.');
-  const [post] = await db.insert(familyGroupPosts).values({ groupId, authorUserId: userId, body: content }).returning({ id: familyGroupPosts.id });
-  await recordActivityEvent('FAMILY_GROUP_POST_CREATED', 'Posted in a family group', userId, 'family_group_post', post.id, { groupId });
-  return { id: post.id };
-}
-
-export async function createFamilyGroupComment(userId: number, groupId: number, postId: number, body: string) {
-  await requireFamilyGroupMember(userId, groupId);
-  const [post] = await db.select({ id: familyGroupPosts.id }).from(familyGroupPosts)
-    .where(and(eq(familyGroupPosts.id, postId), eq(familyGroupPosts.groupId, groupId)));
-  if (!post) throw new Error('Post not found in this group.');
-  const content = body.trim();
-  if (!content || content.length > 2000) throw new Error('Write a reply up to 2,000 characters.');
-  const [comment] = await db.insert(familyGroupComments).values({ postId, authorUserId: userId, body: content }).returning({ id: familyGroupComments.id });
-  await recordActivityEvent('FAMILY_GROUP_COMMENT_CREATED', 'Replied to a family group post', userId, 'family_group_post', post.id, { groupId });
-  return { id: comment.id };
-}
-
 export async function getUserFamilyTree(userId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.getUserFamilyTree(userId);
   try {
     const userPerson = await ensureUserPerson(userId, '');
     const [userProfile] = await db.select().from(profiles).where(eq(profiles.personId, userPerson.id));
@@ -1735,6 +1418,7 @@ export async function addFamilyMember(
     };
   }
 ) {
+  if (await shouldUseMockDatabase()) return mockRepo.addFamilyMember(userId, data);
   try {
     const supportedGenders = ['female', 'male', 'non_binary', 'another', 'unspecified'];
     if (data.gender && !supportedGenders.includes(data.gender)) {
@@ -1945,6 +1629,7 @@ export async function updateFamilyRelationship(
     visibility?: VisibilitySetting;
   }
 ) {
+  if (await shouldUseMockDatabase()) return mockRepo.updateFamilyRelationship(userId, relationshipId, data);
   try {
     const [existing] = await db
       .select()
@@ -2011,6 +1696,7 @@ export async function updateFamilyRelationship(
 }
 
 export async function removeRelationship(userId: number, relationshipIdOrPersonId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.removeRelationship(userId, relationshipIdOrPersonId);
   try {
     const userPerson = await ensureUserPerson(userId, '');
 
@@ -2120,6 +1806,7 @@ export async function createFamilyInvitation(
     relationshipType: string;
   }
 ) {
+  if (await shouldUseMockDatabase()) return mockRepo.createFamilyInvitation(userId, data);
   try {
     const person = await requireManageablePerson(userId, data.personId);
     if (person.createdByUserId !== userId || person.userId !== null) {
@@ -2178,6 +1865,7 @@ export async function createFamilyInvitation(
 }
 
 export async function getFamilyInvitations(userId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.getFamilyInvitations(userId);
   try {
     const invites = await db
       .select({
@@ -2231,6 +1919,7 @@ async function ensureInvitationNotificationState(userId: number) {
 }
 
 export async function getFamilyInvitationNotificationState(userId: number, verifiedEmail?: string | null) {
+  if (await shouldUseMockDatabase()) return mockRepo.getFamilyInvitationNotificationState(userId, verifiedEmail);
   const state = await ensureInvitationNotificationState(userId);
   const normalizedEmail = verifiedEmail?.trim().toLowerCase();
   const invitationScope = normalizedEmail
@@ -2245,13 +1934,6 @@ export async function getFamilyInvitationNotificationState(userId: number, verif
       invitationScope,
       eq(familyInvitations.status, 'pending'),
       sql`${familyInvitations.expiresAt} > now()`,
-    ));
-  const [groupPending] = await db.select({ count: sql<number>`count(*)` })
-    .from(familyGroupInvitations)
-    .where(and(
-      eq(familyGroupInvitations.inviteeUserId, userId),
-      eq(familyGroupInvitations.status, 'pending'),
-      gt(familyGroupInvitations.expiresAt, new Date()),
     ));
 
   const sentClaimedActivity = and(
@@ -2268,30 +1950,19 @@ export async function getFamilyInvitationNotificationState(userId: number, verif
         sql`${familyInvitations.expiresAt} > now()`,
       )
     : undefined;
-  const receivedGroupInviteActivity = and(
-    eq(familyGroupInvitations.inviteeUserId, userId),
-    eq(familyGroupInvitations.status, 'pending'),
-    gt(familyGroupInvitations.createdAt, state.activityReadAt),
-    gt(familyGroupInvitations.expiresAt, new Date()),
-  );
   const [unread] = await db.select({ count: sql<number>`count(*)` })
     .from(familyInvitations)
-    .where(receivedInviteActivity
-      ? or(sentClaimedActivity, receivedInviteActivity)
-      : sentClaimedActivity);
-  const [groupUnread] = await db.select({ count: sql<number>`count(*)` })
-    .from(familyGroupInvitations)
-    .where(receivedGroupInviteActivity);
+    .where(receivedInviteActivity ? or(sentClaimedActivity, receivedInviteActivity) : sentClaimedActivity);
 
   return {
     pendingCount: Number(pending?.count || 0),
-    groupsPendingCount: Number(groupPending?.count || 0),
-    hasUnreadActivity: Number(unread?.count || 0) > 0 || Number(groupUnread?.count || 0) > 0,
+    hasUnreadActivity: Number(unread?.count || 0) > 0,
     alertsEnabled: state.alertsEnabled,
   };
 }
 
 export async function markFamilyInvitationActivityRead(userId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.markFamilyInvitationActivityRead(userId);
   const now = new Date();
   await db.insert(familyInvitationNotificationStates)
     .values({ userId, activityReadAt: now, updatedAt: now })
@@ -2302,6 +1973,7 @@ export async function markFamilyInvitationActivityRead(userId: number) {
 }
 
 export async function setFamilyInvitationAlertsEnabled(userId: number, alertsEnabled: boolean) {
+  if (await shouldUseMockDatabase()) return mockRepo.setFamilyInvitationAlertsEnabled(userId, alertsEnabled);
   const now = new Date();
   await db.insert(familyInvitationNotificationStates)
     .values({ userId, alertsEnabled, updatedAt: now })
@@ -2312,6 +1984,7 @@ export async function setFamilyInvitationAlertsEnabled(userId: number, alertsEna
 }
 
 export async function acceptFamilyInvitation(userId: number, inviteCode: string, verifiedEmail?: string | null) {
+  if (await shouldUseMockDatabase()) return mockRepo.acceptFamilyInvitation(userId, inviteCode, verifiedEmail);
   try {
     const cleanCode = inviteCode.trim();
     if (!/^[A-Za-z0-9_-]{8,64}$/.test(cleanCode)) throw new Error('Invalid or expired invitation code.');
@@ -2398,6 +2071,7 @@ export async function connectRegisteredUserToPerson(
     targetEmailOrCode: string;
   }
 ) {
+  if (await shouldUseMockDatabase()) return mockRepo.connectRegisteredUserToPerson(userId, data);
   try {
     const input = data.targetEmailOrCode.trim();
     if (input.includes('@')) throw new Error('The account owner must accept a verified-email invitation before linking.');
@@ -2427,6 +2101,7 @@ export async function connectRegisteredUserToPerson(
 }
 
 export async function getKinshipDiscoverySuggestions(userId: number, verifiedEmail?: string | null) {
+  if (await shouldUseMockDatabase()) return mockRepo.getKinshipDiscoverySuggestions(userId, verifiedEmail);
   try {
     const [currentUser] = await db.select().from(users).where(eq(users.id, userId));
     const normalizedEmail = verifiedEmail?.trim().toLowerCase();
@@ -2473,6 +2148,7 @@ export async function getKinshipDiscoverySuggestions(userId: number, verifiedEma
 }
 
 export async function claimDiscoveredPerson(userId: number, invitationId: number, verifiedEmail?: string | null) {
+  if (await shouldUseMockDatabase()) return mockRepo.claimDiscoveredPerson(userId, invitationId, verifiedEmail);
   try {
     if (!verifiedEmail) throw new Error('Sign in with a verified email account to accept this invitation.');
     const personId = await db.transaction(async (tx) => {
@@ -2542,6 +2218,7 @@ export async function claimDiscoveredPerson(userId: number, invitationId: number
 }
 
 export async function getFamilyStories(userId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.getFamilyStories(userId);
   const family = await getUserFamily(userId);
   const connectedUserIds = [...new Set(family
     .map((member) => member.userId)
@@ -2589,6 +2266,7 @@ export async function createFamilyStory(userId: number, input: {
   visibility: 'private' | 'family';
   consentVersion: string;
 }) {
+  if (await shouldUseMockDatabase()) return mockRepo.createFamilyStory(userId, input);
   if (!input.storagePath.startsWith(`${userId}/`)) throw new Error('Invalid story storage path.');
   const person = await ensureUserPerson(userId, '');
   const [story] = await db.insert(familyStories).values({
@@ -2616,36 +2294,8 @@ export async function createFamilyStory(userId: number, input: {
   return { id: story.id };
 }
 
-export async function updateFamilyStorySharing(userId: number, storyId: number, visibility: 'private' | 'family') {
-  const [story] = await db.select({ id: familyStories.id, visibility: familyStories.visibility })
-    .from(familyStories)
-    .where(and(eq(familyStories.id, storyId), eq(familyStories.ownerUserId, userId)));
-  if (!story) throw new Error('Story not found or permission denied.');
-
-  await db.update(familyStories)
-    .set({
-      visibility,
-      ...(visibility === 'family' ? {
-        consentVersion: 'family-story-consent-v1',
-        consentConfirmedAt: new Date(),
-      } : {}),
-    })
-    .where(eq(familyStories.id, storyId));
-
-  if (story.visibility !== visibility) {
-    await recordActivityEvent(
-      'FAMILY_STORY_SHARING_UPDATED',
-      visibility === 'family' ? 'Shared a family story with direct connections' : 'Made a family story private',
-      userId,
-      'family_story',
-      storyId,
-      { previous: story.visibility, selected: visibility },
-    );
-  }
-  return { success: true, visibility };
-}
-
 export async function getFamilyStoryStoragePath(userId: number, storyId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.getFamilyStoryStoragePath(userId, storyId);
   const [story] = await db.select().from(familyStories).where(eq(familyStories.id, storyId));
   if (!story) throw new Error('Story not found.');
   if (story.ownerUserId === userId) return story.storagePath;
@@ -2658,6 +2308,7 @@ export async function getFamilyStoryStoragePath(userId: number, storyId: number)
 }
 
 export async function deleteFamilyStory(userId: number, storyId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.deleteFamilyStory(userId, storyId);
   const [story] = await db.select().from(familyStories).where(and(
     eq(familyStories.id, storyId),
     eq(familyStories.ownerUserId, userId),
@@ -2694,6 +2345,7 @@ export async function recordActivityEvent(
 
 // 10. Data Control: Export My Data
 export async function exportUserData(userId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.exportUserData(userId);
   try {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     const person = await ensureUserPerson(userId, user?.email || '');
@@ -2755,6 +2407,7 @@ export async function exportUserData(userId: number) {
 
 // 11. Data Control: Delete My Account
 export async function deleteUserAccount(userId: number) {
+  if (await shouldUseMockDatabase()) return mockRepo.deleteUserAccount(userId);
   try {
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     if (!user) {
@@ -2787,6 +2440,7 @@ export async function deleteUserAccount(userId: number) {
 
 // 12. Administration & Platform Health
 export async function getAdminMetrics(adminUserId: number, reason: string) {
+  if (await shouldUseMockDatabase()) return mockRepo.getAdminMetrics(adminUserId, reason);
   try {
     const [adminUser] = await db.select().from(users).where(eq(users.id, adminUserId));
     if (!adminUser || adminUser.role !== 'admin') {
@@ -2848,6 +2502,7 @@ export async function getAdminMetrics(adminUserId: number, reason: string) {
 }
 
 export async function getAdminRecentActivity(limit = 20) {
+  if (await shouldUseMockDatabase()) return mockRepo.getAdminRecentActivity(limit);
   try {
     return await db
       .select()
@@ -2861,6 +2516,7 @@ export async function getAdminRecentActivity(limit = 20) {
 }
 
 export async function getAdminUsersList(searchQuery?: string) {
+  if (await shouldUseMockDatabase()) return mockRepo.getAdminUsersList(searchQuery);
   try {
     // Only return minimal operational data: id, email, role, status, onboardingCompleted, createdAt
     let query = db
@@ -2898,6 +2554,7 @@ export async function adminUpdateUserStatus(
   status: 'active' | 'suspended',
   reason: string
 ) {
+  if (await shouldUseMockDatabase()) return mockRepo.adminUpdateUserStatus(adminUserId, targetUserId, status, reason);
   try {
     const [admin] = await db.select().from(users).where(eq(users.id, adminUserId));
     if (!admin || admin.role !== 'admin') {
@@ -2929,6 +2586,7 @@ export async function adminUpdateUserStatus(
 }
 
 export async function getAdminLogs(limit = 50) {
+  if (await shouldUseMockDatabase()) return mockRepo.getAdminLogs(limit);
   try {
     return await db
       .select()
@@ -2967,6 +2625,7 @@ export async function recordAdminLog(
 
 // 13. Test / Demo Data Seeder (Section 35)
 export async function seedDemoScenario(userId: number, scenario: 'local' | 'diaspora' | 'international' | 'multigen') {
+  if (await shouldUseMockDatabase()) return mockRepo.seedDemoScenario(userId, scenario);
   try {
     const userPerson = await ensureUserPerson(userId, '');
 
@@ -3129,6 +2788,7 @@ export async function registerWithPassword(
   password: string,
   displayName?: string | null
 ) {
+  if (await shouldUseMockDatabase()) return mockRepo.registerWithPassword(email, password, displayName);
   const normalizedEmail = email.trim().toLowerCase();
   const existing = await db
     .select()
@@ -3208,6 +2868,7 @@ export async function registerWithPassword(
 }
 
 export async function loginWithPassword(email: string, password: string) {
+  if (await shouldUseMockDatabase()) return mockRepo.loginWithPassword(email, password);
   const normalizedEmail = email.trim().toLowerCase();
   const existing = await db
     .select()

@@ -13,7 +13,7 @@ export async function getFamilyStoryStorageStatus() {
   if (!familyStoryStorageConfigured()) {
     return { configured: false, ready: false, message: 'Server-side Supabase Storage credentials are missing.' };
   }
-  const { baseUrl, serviceKey, bucket } = getStorageConfig();
+  const { baseUrl, secretKey: serviceKey, bucket } = getStorageConfig();
   try {
     let response = await fetch(`${baseUrl}/storage/v1/bucket/${encodeURIComponent(bucket)}`, {
       headers: storageHeaders(serviceKey),

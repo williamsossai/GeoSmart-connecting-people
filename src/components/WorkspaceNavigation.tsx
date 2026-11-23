@@ -28,7 +28,6 @@ const sectionTabs: Record<WorkspaceSection, Array<{ id: FamilySubView; label: st
   family: [
     { id: 'overview', label: 'Family overview', hint: 'Connections and relatives' },
     { id: 'tree', label: 'Family tree', hint: 'Explore your family tree' },
-    { id: 'groups', label: 'Groups', hint: 'Organise relatives into family groups' },
     { id: 'invitations', label: 'Invitations', hint: 'Pending invitations and recent activity' },
     { id: 'stories', label: 'Family stories', hint: 'Private voice and video memories' },
   ],
@@ -47,7 +46,7 @@ const followLink = (
 
 export const WorkspaceNavigation: React.FC<WorkspaceNavigationProps> = ({ route, onNavigate }) => {
   const [isSecondaryOpen, setIsSecondaryOpen] = useState(false);
-  const { pendingCount, groupsPendingCount, hasUnreadActivity, alertsEnabled } = useInvitationNotifications();
+  const { pendingCount, hasUnreadActivity, alertsEnabled } = useInvitationNotifications();
   const showInvitationActivity = alertsEnabled && hasUnreadActivity;
   const tabs = sectionTabs[route.section];
   const activeSectionLabel = workspaceSections.find((item) => item.id === route.section)?.label || 'Section';
@@ -137,11 +136,6 @@ export const WorkspaceNavigation: React.FC<WorkspaceNavigationProps> = ({ route,
                       {pendingCount > 0 ? `${pendingCount} pending invitations.` : ''}
                     </span>
                   )}
-                </span>
-              )}
-              {tab.id === 'groups' && groupsPendingCount > 0 && (
-                <span aria-label={`${groupsPendingCount} pending group invitations`} className="min-w-5 rounded-full bg-amber-100 px-1.5 py-0.5 text-center text-[10px] font-bold leading-4 text-amber-900">
-                  {groupsPendingCount > 99 ? '99+' : groupsPendingCount}
                 </span>
               )}
             </span>
