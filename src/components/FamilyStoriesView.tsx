@@ -35,6 +35,7 @@ export const FamilyStoriesView: React.FC = () => {
   const { currentUser, idToken } = useAuth();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [stories, setStories] = useState<FamilyStorySummary[]>([]);
+  const [storageConfigured, setStorageConfigured] = useState(true);
   const [storageReady, setStorageReady] = useState(false);
   const [storageMessage, setStorageMessage] = useState('Checking private media storage configuration…');
   const [loading, setLoading] = useState(true);
@@ -81,6 +82,7 @@ export const FamilyStoriesView: React.FC = () => {
         })),
       ]);
       setStories(items);
+      setStorageConfigured(Boolean(statusResponse.configured));
       setStorageReady(Boolean(statusResponse.ready));
       setStorageMessage(
         statusResponse.message || 'Private media storage for audio and video files is not configured in this environment.',
@@ -313,8 +315,13 @@ export const FamilyStoriesView: React.FC = () => {
 
       {!loading && !storageReady && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
-          <p className="font-semibold">Private media storage needs setup</p>
-          <p className="mt-1 text-xs">{storageMessage} Configure server-side object storage to enable audio and video uploads.</p>
+          <p className="font-semibold">
+            {storageConfigured ? 'Private media storage unavailable' : 'Private media storage needs setup'}
+          </p>
+          <p className="mt-1 text-xs">
+            {storageMessage}
+            {!storageConfigured ? ' Configure server-side object storage to enable audio and video uploads.' : ''}
+          </p>
         </div>
       )}
 

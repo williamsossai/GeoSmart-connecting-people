@@ -18,7 +18,22 @@ export async function getFamilyStoryStorageStatus() {
     let response = await fetch(`${baseUrl}/storage/v1/bucket/${encodeURIComponent(bucket)}`, {
       headers: storageHeaders(serviceKey),
     });
-    if (response.status === 404) {
+
+    let bucketMissing = response.status === 404;
+    if (response.status === 400) {
+      const errBody = (await response.clone().json().catch(() => null)) as
+        | { statusCode?: string | number; code?: string; message?: string; error?: string }
+        | null;
+      if (
+        String(errBody?.statusCode || '') === '404' ||
+        errBody?.code === 'NoSuchBucket' ||
+        /not found/i.test(`${errBody?.message || ''} ${errBody?.error || ''}`)
+      ) {
+        bucketMissing = true;
+      }
+    }
+
+    if (bucketMissing) {
       response = await fetch(`${baseUrl}/storage/v1/bucket`, {
         method: 'POST',
         headers: storageHeaders(serviceKey, 'application/json'),
@@ -36,28 +51,54 @@ export async function getFamilyStoryStorageStatus() {
           headers: storageHeaders(serviceKey),
         });
       }
+      if (response.ok) {
+        response = await fetch(`${baseUrl}/storage/v1/bucket/${encodeURIComponent(bucket)}`, {
+          headers: storageHeaders(serviceKey),
+        });
+      }
     }
-    if (!response.ok) return { configured: true, ready: false, message: 'The private family-stories bucket could not be created or accessed.' };
+    if (response.status === 401 || response.status === 403) {
+      return {
+        configured: true,
+        ready: false,
+        message: 'Supabase Storage rejected the configured secret key. Verify SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY.',
+      };
+    }
+    if (!response.ok) return { configured: true, ready: false, message: `The private ${bucket} bucket could not be created or accessed (HTTP ${response.status}).` };
     const details = await response.json() as { public?: boolean };
     if (details.public !== false) {
-      return { configured: true, ready: false, message: 'The family-stories bucket must be private. Set it to private in Supabase Storage before uploading.' };
+      return { configured: true, ready: false, message: `The ${bucket} bucket must be private. Set it to private in Supabase Storage before uploading.` };
     }
     return { configured: true, ready: true, message: null };
-  } catch {
+  } catch (error: any) {
+    const code = error?.cause?.code || error?.code;
+    if (code === 'ENOTFOUND') {
+      return {
+        configured: true,
+        ready: false,
+        message: 'The configured SUPABASE_URL host could not be found in DNS. Verify that SUPABASE_URL uses your full Supabase Project URL (https://<20-char-project-ref>.supabase.co).',
+      };
+    }
     return { configured: true, ready: false, message: 'Supabase Storage could not be reached.' };
   }
 }
 
 function getStorageConfig() {
-  const baseUrl = process.env.SUPABASE_URL?.replace(/\/+$/, '');
-  const secretKey = process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!baseUrl || !secretKey) {
+  const rawUrl = process.env.SUPABASE_URL?.trim();
+  const secretKey = (process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)?.trim();
+  if (!rawUrl || !secretKey) {
     throw new Error('Family story storage is not configured.');
+  }
+  let baseUrl = rawUrl.replace(/\/+$/, '');
+  try {
+    baseUrl = new URL(rawUrl).origin;
+  } catch {
+    // Keep trimmed string so fetch surfaces the invalid URL cleanly.
   }
   return {
     baseUrl,
     secretKey,
-    bucket: process.env.SUPABASE_STORY_BUCKET || DEFAULT_BUCKET,
+    bucket: process.env.SUPABASE_STORY_BUCKET?.trim() || DEFAULT_BUCKET,
   };
 }
 
@@ -108,6 +149,11 @@ export async function fetchFamilyStoryObject(path: string, range?: string) {
   const result = await signResponse.json() as { signedURL?: string; signedUrl?: string };
   const signedUrl = result.signedURL || result.signedUrl;
   if (!signedUrl) throw new Error('Storage did not return a playback URL.');
-  const mediaUrl = new URL(signedUrl, `${baseUrl}/`).toString();
+  const mediaUrl =
+    signedUrl.startsWith('http://') || signedUrl.startsWith('https://')
+      ? signedUrl
+      : signedUrl.startsWith('/storage/v1/')
+        ? `${baseUrl}${signedUrl}`
+        : `${baseUrl}/storage/v1${signedUrl.startsWith('/') ? signedUrl : `/${signedUrl}`}`;
   return fetch(mediaUrl, { headers: range ? { Range: range } : undefined });
 }
