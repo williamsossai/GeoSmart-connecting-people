@@ -13,6 +13,15 @@
    - Once `status` reaches `'accepted'`, `'expired'`, or `'revoked'`, non-admins CANNOT modify the invitation.
    - Accepting an invitation transitions `status` `'pending' -> 'accepted'` and atomically links `/users/{inviterUid}/familyMembers/{memberId}` ONLY when `getAfter()` proves the matching invitation transitioned to `'accepted'` with `acceptedByUid == request.auth.uid`.
 
+8. **Invite-Only Family Groups & Discussions**:
+   - Only the group organiser (`organizerUid == request.auth.uid`) or accepted members (`request.auth.uid in memberUids`) can read `/familyGroups/{groupId}`, `/familyGroups/{groupId}/members/{memberUid}`, `/familyGroups/{groupId}/posts/{postId}`, or `/familyGroups/{groupId}/posts/{postId}/comments/{commentId}`.
+   - Pending or declined invitees on `/familyGroupInvitations/{inviteId}` are synchronously blocked from reading or writing group discussions.
+   - `memberUids` is strictly bounded (`1 <= size <= 50`) and updated atomically alongside `/familyGroupInvitations/{groupId}__{uid}` and `/familyGroups/{groupId}/members/{uid}`.
+9. **Private & Family-Shared Story Media Isolation**:
+   - `/users/{uid}/stories/{storyId}` is strictly owner-only (or admin), and `storagePath` must match `<uid>/<objectId>` (`^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$`) and remain immutable.
+   - `/sharedFamilyStories/{storyId}` exists ONLY while the owner's `/users/{uid}/stories/{storyId}.visibility == 'family'`, enforced atomically via `getAfter()` on share and `!existsAfter()` when set back to `'private'`. Access is restricted to `allowedUids` (`1 <= size <= 50`).
+   - Backend media streaming (`/api/family/stories/:storyId/media`) verifies the caller's Firebase ID token (`email_verified == true`) and checks story access against Firestore Security Rules via the caller's token before signing Supabase Storage URLs.
+
 ## 2. The "Dirty Dozen" Adversarial Payloads
 1. **Privilege Escalation (Self-Admin Create)**: Creating `/users/{uid}` with `role: 'admin'` as a normal user → `PERMISSION_DENIED`.
 2. **Privilege Escalation (Role/Status Tamper Update)**: Updating `/users/{uid}` with `role: 'admin'` or changing `status: 'suspended'` back to `'active'` → `PERMISSION_DENIED`.
@@ -24,5 +33,5 @@
 8. **Path Poisoning (1KB+ or Special-Char ID)**: Creating `/users/{uid}/places/../../../admin` or a 200-char ID → `PERMISSION_DENIED`.
 9. **Value Poisoning / Denial of Wallet**: Creating or updating a place with a 50KB `notes` string or wrong type (`isCurrent: 'yes'`) → `PERMISSION_DENIED`.
 10. **Invitation State Shortcutting**: Updating `/familyInvitations/{inviteId}` from `'accepted'` back to `'pending'`, or accepting an invitation addressed to a different email → `PERMISSION_DENIED`.
-11. **Unlinked Batch Spoof (Atomicity Bypass)**: Updating `/users/{inviterUid}/familyMembers/{memberId}.linkedUid` without an atomic `getAfter` accepted invitation → `PERMISSION_DENIED`.
+11. **Unlinked Batch Spoof (Atomicity Bypass)**: Updating `/users/{inviterUid}/familyMembers/{memberId}.linkedUid` without an atomic `getAfter` accepted invitation, or reading/posting in `/familyGroups/{groupId}/posts` as a pending/declined invitee → `PERMISSION_DENIED`.
 12. **Client Timestamp / Immortal Field Tampering**: Creating a record with backdated `createdAt`, or altering `createdAt`/`inviterUid` on update, or deleting an immutable `/adminLogs/{logId}` → `PERMISSION_DENIED`.

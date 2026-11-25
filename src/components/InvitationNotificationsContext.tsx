@@ -8,6 +8,7 @@ import {
 
 interface InvitationNotificationState {
   pendingCount: number;
+  groupsPendingCount: number;
   hasUnreadActivity: boolean;
   alertsEnabled: boolean;
 }
@@ -20,6 +21,7 @@ interface InvitationNotificationsContextValue extends InvitationNotificationStat
 
 const defaultState: InvitationNotificationState = {
   pendingCount: 0,
+  groupsPendingCount: 0,
   hasUnreadActivity: false,
   alertsEnabled: true,
 };
@@ -46,6 +48,7 @@ export const InvitationNotificationsProvider: React.FC<{ children: React.ReactNo
       const data = await getFamilyInvitationNotificationStateFs(currentUser.uid);
       setState({
         pendingCount: Number(data.pendingCount || 0),
+        groupsPendingCount: Number(data.groupsPendingCount || 0),
         hasUnreadActivity: Boolean(data.hasUnreadActivity),
         alertsEnabled: Boolean(data.alertsEnabled),
       });

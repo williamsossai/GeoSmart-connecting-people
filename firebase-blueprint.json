@@ -816,6 +816,13 @@
         "fileSize": {
           "type": "integer"
         },
+        "storagePath": {
+          "type": "string",
+          "description": "Private Supabase Storage object key (<ownerUid>/<uuid>)",
+          "minLength": 3,
+          "maxLength": 256,
+          "pattern": "^[a-zA-Z0-9_\\-]+/[a-zA-Z0-9_\\-]+$"
+        },
         "visibility": {
           "type": "string",
           "enum": ["private", "family"],
@@ -838,6 +845,93 @@
         "fileSize",
         "visibility",
         "createdAt"
+      ]
+    },
+    "SharedFamilyStory": {
+      "title": "SharedFamilyStory",
+      "description": "Direct-family shareable story metadata mirrored only while visibility is 'family', gated by bounded allowedUids.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "ownerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "ownerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1200
+        },
+        "mediaType": {
+          "type": "string",
+          "enum": ["audio", "video"],
+          "maxLength": 16
+        },
+        "contentType": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "fileSize": {
+          "type": "integer"
+        },
+        "storagePath": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 256,
+          "pattern": "^[a-zA-Z0-9_\\-]+/[a-zA-Z0-9_\\-]+$"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": ["family"],
+          "maxLength": 16
+        },
+        "allowedUids": {
+          "type": "array",
+          "description": "Bounded array (1..50) containing ownerUid and connected GeoSmart relative UIDs allowed to view and play the story"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "numericId",
+        "ownerUid",
+        "ownerName",
+        "title",
+        "description",
+        "mediaType",
+        "contentType",
+        "fileSize",
+        "storagePath",
+        "visibility",
+        "allowedUids",
+        "createdAt",
+        "updatedAt"
       ]
     },
     "AdminRole": {
@@ -936,6 +1030,349 @@
         "result",
         "timestamp"
       ]
+    },
+    "FamilyGroup": {
+      "title": "FamilyGroup",
+      "description": "Invite-only family circle created by an organiser for connected GeoSmart relatives.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "organizerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "organizerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "memberUids": {
+          "type": "array",
+          "description": "Bounded array (1..50) containing organizerUid and accepted member UIDs for synchronous access enforcement"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "numericId",
+        "name",
+        "description",
+        "organizerUid",
+        "organizerName",
+        "memberUids",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FamilyGroupMemberRecord": {
+      "title": "FamilyGroupMemberRecord",
+      "description": "Accepted participant snapshot inside a family group subcollection.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "groupId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "personNumericId": {
+          "type": "integer"
+        },
+        "relationshipType": {
+          "type": "string",
+          "enum": [
+            "self",
+            "parent",
+            "child",
+            "spouse",
+            "sibling",
+            "grandparent",
+            "grandchild",
+            "relative",
+            "other"
+          ],
+          "maxLength": 24
+        },
+        "isOrganizer": {
+          "type": "boolean"
+        },
+        "joinedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "numericId",
+        "groupId",
+        "name",
+        "personNumericId",
+        "relationshipType",
+        "isOrganizer",
+        "joinedAt"
+      ]
+    },
+    "FamilyGroupInvitation": {
+      "title": "FamilyGroupInvitation",
+      "description": "Invitation for a connected GeoSmart account holder to join a specific family group.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "groupId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "groupName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "groupDescription": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "inviterUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "inviterName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "inviteeUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "inviteeName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "personNumericId": {
+          "type": "integer"
+        },
+        "relationshipType": {
+          "type": "string",
+          "enum": [
+            "parent",
+            "child",
+            "spouse",
+            "sibling",
+            "grandparent",
+            "grandchild",
+            "relative",
+            "other"
+          ],
+          "maxLength": 24
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "accepted", "declined", "revoked"],
+          "maxLength": 16
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "acceptedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "invitedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "numericId",
+        "groupId",
+        "groupName",
+        "groupDescription",
+        "inviterUid",
+        "inviterName",
+        "inviteeUid",
+        "inviteeName",
+        "personNumericId",
+        "relationshipType",
+        "status",
+        "expiresAt",
+        "invitedAt",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "FamilyGroupPost": {
+      "title": "FamilyGroupPost",
+      "description": "Discussion post inside an invite-only family group.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "groupId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 5000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "numericId",
+        "groupId",
+        "authorUid",
+        "authorName",
+        "body",
+        "createdAt"
+      ]
+    },
+    "FamilyGroupComment": {
+      "title": "FamilyGroupComment",
+      "description": "Reply to a family group discussion post.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "numericId": {
+          "type": "integer"
+        },
+        "groupId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "postId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "numericId",
+        "groupId",
+        "postId",
+        "authorUid",
+        "authorName",
+        "body",
+        "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -967,9 +1404,33 @@
       "schema": { "$ref": "#/entities/FamilyStoryRecord" },
       "description": "User family story metadata."
     },
+    "/sharedFamilyStories/{storyId}": {
+      "schema": { "$ref": "#/entities/SharedFamilyStory" },
+      "description": "Family-shared story metadata accessible only to owner and connected GeoSmart relatives in allowedUids."
+    },
     "/familyInvitations/{inviteId}": {
       "schema": { "$ref": "#/entities/FamilyInvitation" },
       "description": "Verified-email family invitations queryable only by inviter or matching verified invitee."
+    },
+    "/familyGroups/{groupId}": {
+      "schema": { "$ref": "#/entities/FamilyGroup" },
+      "description": "Invite-only family groups accessible only to accepted members and the organiser."
+    },
+    "/familyGroups/{groupId}/members/{memberUid}": {
+      "schema": { "$ref": "#/entities/FamilyGroupMemberRecord" },
+      "description": "Accepted member snapshots readable only by active group members."
+    },
+    "/familyGroups/{groupId}/posts/{postId}": {
+      "schema": { "$ref": "#/entities/FamilyGroupPost" },
+      "description": "Family group discussion posts gated by parent group membership."
+    },
+    "/familyGroups/{groupId}/posts/{postId}/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/FamilyGroupComment" },
+      "description": "Replies on family group discussion posts gated by parent group membership."
+    },
+    "/familyGroupInvitations/{inviteId}": {
+      "schema": { "$ref": "#/entities/FamilyGroupInvitation" },
+      "description": "Pending, accepted, declined, or revoked invitations to family groups."
     },
     "/admins/{uid}": {
       "schema": { "$ref": "#/entities/AdminRole" },

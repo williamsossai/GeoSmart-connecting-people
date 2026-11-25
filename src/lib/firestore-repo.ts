@@ -1,7 +1,10 @@
 import type { User } from 'firebase/auth';
 import {
+  arrayRemove,
+  arrayUnion,
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -19,6 +22,11 @@ import type {
   CommunityConnectionType,
   CommunityType,
   CommunityWithConnection,
+  FamilyGroup,
+  FamilyGroupComment,
+  FamilyGroupInvitationSummary,
+  FamilyGroupMember,
+  FamilyGroupPost,
   FamilyInvitationRecord,
   FamilyMemberWithPerson,
   FamilyStorySummary,
@@ -306,7 +314,89 @@ interface StoryDoc {
   mediaType: 'audio' | 'video';
   contentType: string;
   fileSize: number;
+  storagePath?: string;
   visibility: 'private' | 'family';
+  createdAt: unknown;
+}
+
+interface SharedFamilyStoryDoc {
+  id: string;
+  numericId: number;
+  ownerUid: string;
+  ownerName: string;
+  title: string;
+  description: string;
+  mediaType: 'audio' | 'video';
+  contentType: string;
+  fileSize: number;
+  storagePath: string;
+  visibility: 'family';
+  allowedUids: string[];
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+interface FamilyGroupDoc {
+  id: string;
+  numericId: number;
+  name: string;
+  description: string;
+  organizerUid: string;
+  organizerName: string;
+  memberUids: string[];
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+interface FamilyGroupMemberDoc {
+  uid: string;
+  numericId: number;
+  groupId: string;
+  name: string;
+  personNumericId: number;
+  relationshipType: string;
+  isOrganizer: boolean;
+  joinedAt: unknown;
+}
+
+interface FamilyGroupInvitationDoc {
+  id: string;
+  numericId: number;
+  groupId: string;
+  groupName: string;
+  groupDescription: string;
+  inviterUid: string;
+  inviterName: string;
+  inviteeUid: string;
+  inviteeName: string;
+  personNumericId: number;
+  relationshipType: RelationshipType;
+  status: 'pending' | 'accepted' | 'declined' | 'revoked';
+  expiresAt: unknown;
+  acceptedAt?: unknown;
+  invitedAt: unknown;
+  createdAt: unknown;
+  updatedAt: unknown;
+}
+
+interface FamilyGroupPostDoc {
+  id: string;
+  numericId: number;
+  groupId: string;
+  authorUid: string;
+  authorName: string;
+  body: string;
+  createdAt: unknown;
+}
+
+interface FamilyGroupCommentDoc {
+  id: string;
+  numericId: number;
+  groupId: string;
+  postId: string;
+  authorUid: string;
+  authorName: string;
+  body: string;
   createdAt: unknown;
 }
 
@@ -1659,7 +1749,7 @@ export async function acceptFamilyInvitationByCodeFs(uid: string, inviteCode: st
 
 export async function getFamilyInvitationNotificationStateFs(
   uid: string,
-): Promise<{ pendingCount: number; hasUnreadActivity: boolean; alertsEnabled: boolean }> {
+): Promise<{ pendingCount: number; groupsPendingCount: number; hasUnreadActivity: boolean; alertsEnabled: boolean }> {
   const fbUser = auth.currentUser;
   const userPath = `users/${uid}`;
   let userSnap;
@@ -1669,7 +1759,7 @@ export async function getFamilyInvitationNotificationStateFs(
     handleFirestoreError(error, OperationType.GET, userPath);
   }
   if (!userSnap.exists()) {
-    return { pendingCount: 0, hasUnreadActivity: false, alertsEnabled: true };
+    return { pendingCount: 0, groupsPendingCount: 0, hasUnreadActivity: false, alertsEnabled: true };
   }
   const userDoc = userSnap.data() as UserAccountDoc;
   const readMs = tsToMs(userDoc.activityReadAt);
@@ -1689,6 +1779,23 @@ export async function getFamilyInvitationNotificationStateFs(
     receivedPending = await listReceivedPendingInvitations(fbUser.email, uid);
   }
 
+  let incomingGroupInvites: FamilyGroupInvitationDoc[] = [];
+  try {
+    const gq = query(collection(db, 'familyGroupInvitations'), where('inviteeUid', '==', uid));
+    const gSnap = await getDocs(gq);
+    incomingGroupInvites = gSnap.docs.map((d) => d.data() as FamilyGroupInvitationDoc);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'familyGroupInvitations');
+  }
+
+  const pendingGroupInvites = incomingGroupInvites.filter(
+    (inv) => inv.status === 'pending' && tsToMs(inv.expiresAt) > now,
+  );
+  const groupsPendingCount = pendingGroupInvites.length;
+  const hasUnreadGroupInvites = pendingGroupInvites.some(
+    (inv) => tsToMs(inv.invitedAt || inv.createdAt) > readMs,
+  );
+
   const sentPendingCount = sentInvites.filter(
     (inv) => inv.status === 'pending' && tsToMs(inv.expiresAt) > now,
   ).length;
@@ -1701,7 +1808,8 @@ export async function getFamilyInvitationNotificationStateFs(
 
   return {
     pendingCount,
-    hasUnreadActivity: hasUnreadClaimed || hasUnreadReceived,
+    groupsPendingCount,
+    hasUnreadActivity: hasUnreadClaimed || hasUnreadReceived || hasUnreadGroupInvites,
     alertsEnabled: Boolean(userDoc.alertsEnabled),
   };
 }
@@ -1732,36 +1840,1031 @@ export async function setFamilyInvitationAlertsEnabledFs(uid: string, enabled: b
   }
 }
 
+export async function getUserFamilyGroupsFs(uid: string): Promise<FamilyGroup[]> {
+  requireVerifiedCurrentUser();
+  let groupDocs: FamilyGroupDoc[] = [];
+  try {
+    const q = query(collection(db, 'familyGroups'), where('memberUids', 'array-contains', uid));
+    const snap = await getDocs(q);
+    groupDocs = snap.docs.map((d) => d.data() as FamilyGroupDoc);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'familyGroups');
+  }
+
+  let sentInvites: FamilyGroupInvitationDoc[] = [];
+  try {
+    const invQ = query(collection(db, 'familyGroupInvitations'), where('inviterUid', '==', uid));
+    const invSnap = await getDocs(invQ);
+    sentInvites = invSnap.docs.map((d) => d.data() as FamilyGroupInvitationDoc);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'familyGroupInvitations');
+  }
+
+  const now = Date.now();
+  const sortedGroups = [...groupDocs].sort((a, b) => tsToMs(b.createdAt) - tsToMs(a.createdAt));
+
+  return Promise.all(
+    sortedGroups.map(async (group) => {
+      const isOwner = group.organizerUid === uid;
+      let memberDocs: FamilyGroupMemberDoc[] = [];
+      try {
+        const memSnap = await getDocs(collection(db, 'familyGroups', group.id, 'members'));
+        memberDocs = memSnap.docs.map((d) => d.data() as FamilyGroupMemberDoc);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.LIST, `familyGroups/${group.id}/members`);
+      }
+
+      const acceptedMembers: FamilyGroupMember[] = [...memberDocs]
+        .sort((a, b) => {
+          if (a.isOrganizer !== b.isOrganizer) return a.isOrganizer ? -1 : 1;
+          return tsToMs(a.joinedAt) - tsToMs(b.joinedAt);
+        })
+        .map((m) => ({
+          userId: m.numericId,
+          userUid: m.uid,
+          name: m.name || (m.isOrganizer ? 'Group organiser' : 'Family member'),
+          personId: m.isOrganizer ? null : m.personNumericId || null,
+          relationshipType: m.isOrganizer ? 'self' : m.relationshipType || 'relative',
+          joinedAt: tsToIso(m.joinedAt),
+          status: 'accepted',
+          isOrganizer: Boolean(m.isOrganizer),
+          isCurrentUser: m.uid === uid,
+        }));
+
+      const acceptedUids = new Set(acceptedMembers.map((m) => m.userUid));
+      const pendingInvites: FamilyGroupMember[] = isOwner
+        ? sentInvites
+            .filter(
+              (inv) =>
+                inv.groupId === group.id &&
+                inv.status === 'pending' &&
+                tsToMs(inv.expiresAt) > now &&
+                !acceptedUids.has(inv.inviteeUid),
+            )
+            .sort((a, b) => tsToMs(b.invitedAt || b.createdAt) - tsToMs(a.invitedAt || a.createdAt))
+            .map((inv) => ({
+              userId: toNumericId(inv.inviteeUid),
+              userUid: inv.inviteeUid,
+              name: inv.inviteeName || 'Family member',
+              personId: inv.personNumericId,
+              relationshipType: inv.relationshipType,
+              joinedAt: tsToIso(inv.invitedAt || inv.createdAt),
+              status: 'pending',
+              isOrganizer: false,
+              isCurrentUser: false,
+            }))
+        : [];
+
+      return {
+        id: group.numericId,
+        groupId: group.id,
+        name: group.name,
+        description: group.description || null,
+        createdAt: tsToIso(group.createdAt),
+        isOwner,
+        members: [...acceptedMembers, ...pendingInvites],
+      };
+    }),
+  );
+}
+
+export async function createUserFamilyGroupFs(
+  uid: string,
+  input: { name: string; description?: string | null; personIds: number[]; inviteConfirmed: boolean },
+): Promise<{ id: number; groupId: string }> {
+  requireVerifiedCurrentUser();
+  if (input.inviteConfirmed !== true) {
+    throw new Error('Confirm that the selected account holders should be invited to this group.');
+  }
+  const name = clamp(input.name, 100);
+  if (!name) throw new Error('Enter a group name up to 100 characters.');
+  const rawDescription = (input.description || '').trim();
+  if (rawDescription.length > 1000) {
+    throw new Error('Group description must be 1,000 characters or fewer.');
+  }
+  const description = clamp(rawDescription, 1000);
+
+  const uniquePersonIds = Array.from(new Set(input.personIds.filter((id) => Number.isInteger(id) && id > 0)));
+  if (uniquePersonIds.length === 0) {
+    throw new Error('Choose at least one family member to invite.');
+  }
+  if (uniquePersonIds.length > 49) {
+    throw new Error('A family group can include up to 50 members.');
+  }
+
+  let userSnap;
+  try {
+    userSnap = await getDoc(doc(db, 'users', uid));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `users/${uid}`);
+  }
+  if (!userSnap.exists()) throw new Error('Account profile not found.');
+  const userDoc = userSnap.data() as UserAccountDoc;
+  const organizerName =
+    clamp(userDoc.displayName || `${userDoc.firstName} ${userDoc.lastName}`.trim(), 120) || 'Group organiser';
+
+  const memberDocs = await listOwnerSubcollection<FamilyMemberDoc>(uid, 'familyMembers');
+  const memberByPersonId = new Map(memberDocs.map((m) => [m.numericId, m]));
+  const selectedDocs: FamilyMemberDoc[] = [];
+  const seenLinkedUids = new Set<string>();
+
+  for (const personId of uniquePersonIds) {
+    const member = memberByPersonId.get(personId);
+    if (!member) {
+      throw new Error('Groups can invite only people already connected to your family.');
+    }
+    if (!member.linkedUid || member.linkedUid === uid) {
+      throw new Error(
+        'Every group participant needs a GeoSmart account. Invite relatives to GeoSmart first, then add them to a group.',
+      );
+    }
+    if (!seenLinkedUids.has(member.linkedUid)) {
+      seenLinkedUids.add(member.linkedUid);
+      selectedDocs.push(member);
+    }
+  }
+
+  const groupId = generateSafeId('grp');
+  const groupNumericId = toNumericId(groupId);
+  const expiresAt = Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+  const batch = writeBatch(db);
+
+  batch.set(doc(db, 'familyGroups', groupId), {
+    id: groupId,
+    numericId: groupNumericId,
+    name,
+    description,
+    organizerUid: uid,
+    organizerName,
+    memberUids: [uid],
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  batch.set(doc(db, 'familyGroups', groupId, 'members', uid), {
+    uid,
+    numericId: userDoc.numericId,
+    groupId,
+    name: organizerName,
+    personNumericId: 0,
+    relationshipType: 'self',
+    isOrganizer: true,
+    joinedAt: serverTimestamp(),
+  });
+
+  for (const member of selectedDocs) {
+    const inviteId = `${groupId}__${member.linkedUid}`;
+    const inviteeName =
+      clamp(`${member.firstName} ${member.lastName}`.trim(), 120) || 'Family member';
+    batch.set(doc(db, 'familyGroupInvitations', inviteId), {
+      id: inviteId,
+      numericId: toNumericId(inviteId),
+      groupId,
+      groupName: name,
+      groupDescription: description,
+      inviterUid: uid,
+      inviterName: organizerName,
+      inviteeUid: member.linkedUid,
+      inviteeName,
+      personNumericId: member.numericId,
+      relationshipType: member.relationshipType,
+      status: 'pending',
+      expiresAt,
+      invitedAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `familyGroups/${groupId}`);
+  }
+
+  await recordActivityEventFs(uid, 'FAMILY_GROUP_CREATED', `Created family group: ${name}`, 'family_group');
+  return { id: groupNumericId, groupId };
+}
+
+export async function updateUserFamilyGroupFs(
+  uid: string,
+  groupId: string,
+  input: { name: string; description?: string | null },
+): Promise<{ success: boolean; name: string }> {
+  requireVerifiedCurrentUser();
+  const name = clamp(input.name, 100);
+  if (!name) throw new Error('Enter a group name up to 100 characters.');
+  const rawDescription = (input.description || '').trim();
+  if (rawDescription.length > 1000) {
+    throw new Error('Group description must be 1,000 characters or fewer.');
+  }
+  const description = clamp(rawDescription, 1000);
+
+  const path = `familyGroups/${groupId}`;
+  let snap;
+  try {
+    snap = await getDoc(doc(db, 'familyGroups', groupId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+  if (!snap.exists()) throw new Error('Family group not found.');
+  const group = snap.data() as FamilyGroupDoc;
+  if (group.organizerUid !== uid) {
+    throw new Error('Only the group organiser can rename this group.');
+  }
+
+  try {
+    await updateDoc(doc(db, 'familyGroups', groupId), {
+      name,
+      description,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+
+  await recordActivityEventFs(uid, 'FAMILY_GROUP_UPDATED', `Updated family group: ${name}`, 'family_group');
+  return { success: true, name };
+}
+
+export async function deleteUserFamilyGroupFs(uid: string, groupId: string): Promise<{ success: boolean }> {
+  requireVerifiedCurrentUser();
+  const path = `familyGroups/${groupId}`;
+  let snap;
+  try {
+    snap = await getDoc(doc(db, 'familyGroups', groupId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, path);
+  }
+  if (!snap.exists()) throw new Error('Group not found.');
+  const group = snap.data() as FamilyGroupDoc;
+  if (group.organizerUid !== uid) {
+    throw new Error('Group not found or permission denied.');
+  }
+
+  const refsToDelete: Array<ReturnType<typeof doc>> = [];
+
+  try {
+    const postsSnap = await getDocs(collection(db, 'familyGroups', groupId, 'posts'));
+    for (const postDoc of postsSnap.docs) {
+      const commentsSnap = await getDocs(
+        collection(db, 'familyGroups', groupId, 'posts', postDoc.id, 'comments'),
+      );
+      for (const commentDoc of commentsSnap.docs) {
+        refsToDelete.push(commentDoc.ref);
+      }
+      refsToDelete.push(postDoc.ref);
+    }
+
+    const membersSnap = await getDocs(collection(db, 'familyGroups', groupId, 'members'));
+    for (const memDoc of membersSnap.docs) {
+      refsToDelete.push(memDoc.ref);
+    }
+
+    const invSnap = await getDocs(
+      query(collection(db, 'familyGroupInvitations'), where('inviterUid', '==', uid)),
+    );
+    for (const invDoc of invSnap.docs) {
+      const data = invDoc.data() as FamilyGroupInvitationDoc;
+      if (data.groupId === groupId) refsToDelete.push(invDoc.ref);
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+
+  for (let i = 0; i < refsToDelete.length; i += 400) {
+    const batch = writeBatch(db);
+    for (const ref of refsToDelete.slice(i, i + 400)) {
+      batch.delete(ref);
+    }
+    try {
+      await batch.commit();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, path);
+    }
+  }
+
+  try {
+    await deleteDoc(doc(db, 'familyGroups', groupId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+
+  await recordActivityEventFs(uid, 'FAMILY_GROUP_DELETED', `Deleted family group: ${group.name}`, 'family_group');
+  return { success: true };
+}
+
+export async function inviteToFamilyGroupFs(
+  uid: string,
+  groupId: string,
+  personId: number,
+): Promise<{ success: boolean }> {
+  requireVerifiedCurrentUser();
+  const groupPath = `familyGroups/${groupId}`;
+  let groupSnap;
+  try {
+    groupSnap = await getDoc(doc(db, 'familyGroups', groupId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, groupPath);
+  }
+  if (!groupSnap.exists()) throw new Error('Family group not found.');
+  const group = groupSnap.data() as FamilyGroupDoc;
+  if (group.organizerUid !== uid) {
+    throw new Error('Only the group organiser can invite members.');
+  }
+  if (group.memberUids.length >= 50) {
+    throw new Error('This group has reached the maximum of 50 members.');
+  }
+
+  const memberDocs = await listOwnerSubcollection<FamilyMemberDoc>(uid, 'familyMembers');
+  const person = memberDocs.find((m) => m.numericId === personId);
+  if (!person || !person.linkedUid || person.linkedUid === uid) {
+    throw new Error('Choose a connected relative with a GeoSmart account.');
+  }
+  if (group.memberUids.includes(person.linkedUid)) {
+    throw new Error('This person is already a member of the group.');
+  }
+
+  let sentInvites: FamilyGroupInvitationDoc[] = [];
+  try {
+    const invSnap = await getDocs(
+      query(collection(db, 'familyGroupInvitations'), where('inviterUid', '==', uid)),
+    );
+    sentInvites = invSnap.docs.map((d) => d.data() as FamilyGroupInvitationDoc);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'familyGroupInvitations');
+  }
+
+  const inviteId = `${groupId}__${person.linkedUid}`;
+  const existingInvite = sentInvites.find((inv) => inv.id === inviteId);
+  if (existingInvite?.status === 'accepted') {
+    throw new Error('This person is already a member of the group.');
+  }
+  if (existingInvite?.status === 'pending' && tsToMs(existingInvite.expiresAt) > Date.now()) {
+    throw new Error('An invitation is already pending for this person.');
+  }
+
+  let userSnap;
+  try {
+    userSnap = await getDoc(doc(db, 'users', uid));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `users/${uid}`);
+  }
+  const userDoc = userSnap.exists() ? (userSnap.data() as UserAccountDoc) : null;
+  const inviterName =
+    clamp(userDoc?.displayName || group.organizerName || 'Group organiser', 120) || 'Group organiser';
+  const inviteeName = clamp(`${person.firstName} ${person.lastName}`.trim(), 120) || 'Family member';
+  const expiresAt = Timestamp.fromDate(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000));
+
+  try {
+    if (existingInvite) {
+      await updateDoc(doc(db, 'familyGroupInvitations', inviteId), {
+        groupName: clamp(group.name, 100),
+        groupDescription: clamp(group.description, 1000),
+        inviterName,
+        inviteeName,
+        personNumericId: person.numericId,
+        relationshipType: person.relationshipType,
+        status: 'pending',
+        expiresAt,
+        invitedAt: serverTimestamp(),
+        acceptedAt: deleteField(),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(doc(db, 'familyGroupInvitations', inviteId), {
+        id: inviteId,
+        numericId: toNumericId(inviteId),
+        groupId,
+        groupName: clamp(group.name, 100),
+        groupDescription: clamp(group.description, 1000),
+        inviterUid: uid,
+        inviterName,
+        inviteeUid: person.linkedUid,
+        inviteeName,
+        personNumericId: person.numericId,
+        relationshipType: person.relationshipType,
+        status: 'pending',
+        expiresAt,
+        invitedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `familyGroupInvitations/${inviteId}`);
+  }
+
+  await recordActivityEventFs(uid, 'FAMILY_GROUP_INVITATION_SENT', `Invited a relative to ${group.name}`, 'family_group');
+  return { success: true };
+}
+
+export async function getIncomingFamilyGroupInvitationsFs(
+  uid: string,
+): Promise<FamilyGroupInvitationSummary[]> {
+  requireVerifiedCurrentUser();
+  let docs: FamilyGroupInvitationDoc[] = [];
+  try {
+    const q = query(collection(db, 'familyGroupInvitations'), where('inviteeUid', '==', uid));
+    const snap = await getDocs(q);
+    docs = snap.docs.map((d) => d.data() as FamilyGroupInvitationDoc);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'familyGroupInvitations');
+  }
+
+  const now = Date.now();
+  return docs
+    .filter((inv) => inv.status === 'pending' && tsToMs(inv.expiresAt) > now)
+    .sort((a, b) => tsToMs(b.invitedAt || b.createdAt) - tsToMs(a.invitedAt || a.createdAt))
+    .map((inv) => ({
+      id: inv.numericId,
+      invitationId: inv.id,
+      groupId: inv.groupId,
+      groupNumericId: toNumericId(inv.groupId),
+      groupName: inv.groupName,
+      groupDescription: inv.groupDescription || null,
+      inviterUserId: toNumericId(inv.inviterUid),
+      inviterName: inv.inviterName || 'A family member',
+      createdAt: tsToIso(inv.invitedAt || inv.createdAt),
+      expiresAt: tsToIso(inv.expiresAt),
+    }));
+}
+
+export async function respondToFamilyGroupInvitationFs(
+  uid: string,
+  invitationId: string,
+  accept: boolean,
+): Promise<{ success: boolean; accepted: boolean }> {
+  requireVerifiedCurrentUser();
+  const invPath = `familyGroupInvitations/${invitationId}`;
+  let invSnap;
+  try {
+    invSnap = await getDoc(doc(db, 'familyGroupInvitations', invitationId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, invPath);
+  }
+  if (!invSnap.exists()) throw new Error('Invitation is no longer available.');
+  const inv = invSnap.data() as FamilyGroupInvitationDoc;
+  if (inv.inviteeUid !== uid || inv.status !== 'pending' || tsToMs(inv.expiresAt) <= Date.now()) {
+    throw new Error('Invitation is no longer available.');
+  }
+
+  if (!accept) {
+    try {
+      await updateDoc(doc(db, 'familyGroupInvitations', invitationId), {
+        status: 'declined',
+        acceptedAt: deleteField(),
+        updatedAt: serverTimestamp(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, invPath);
+    }
+    await recordActivityEventFs(uid, 'FAMILY_GROUP_INVITATION_DECLINED', 'Declined a family group invitation', 'family_group');
+    return { success: true, accepted: false };
+  }
+
+  let userSnap;
+  try {
+    userSnap = await getDoc(doc(db, 'users', uid));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `users/${uid}`);
+  }
+  const userDoc = userSnap.exists() ? (userSnap.data() as UserAccountDoc) : null;
+  const memberName =
+    clamp(
+      userDoc?.displayName || `${userDoc?.firstName || ''} ${userDoc?.lastName || ''}`.trim() || inv.inviteeName,
+      120,
+    ) || 'Family member';
+
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'familyGroupInvitations', invitationId), {
+    status: 'accepted',
+    acceptedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  batch.update(doc(db, 'familyGroups', inv.groupId), {
+    memberUids: arrayUnion(uid),
+    updatedAt: serverTimestamp(),
+  });
+  batch.set(doc(db, 'familyGroups', inv.groupId, 'members', uid), {
+    uid,
+    numericId: userDoc?.numericId || toNumericId(uid),
+    groupId: inv.groupId,
+    name: memberName,
+    personNumericId: inv.personNumericId,
+    relationshipType: inv.relationshipType,
+    isOrganizer: false,
+    joinedAt: serverTimestamp(),
+  });
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, invPath);
+  }
+
+  await recordActivityEventFs(uid, 'FAMILY_GROUP_INVITATION_ACCEPTED', 'Joined a family group', 'family_group');
+  return { success: true, accepted: true };
+}
+
+export async function removeFamilyGroupMemberFs(
+  actorUid: string,
+  groupId: string,
+  targetUid: string,
+): Promise<{ success: boolean; groupName: string }> {
+  requireVerifiedCurrentUser();
+  const groupPath = `familyGroups/${groupId}`;
+  let groupSnap;
+  try {
+    groupSnap = await getDoc(doc(db, 'familyGroups', groupId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, groupPath);
+  }
+  if (!groupSnap.exists()) throw new Error('Family group not found.');
+  const group = groupSnap.data() as FamilyGroupDoc;
+
+  if (targetUid === group.organizerUid) {
+    throw new Error('The organiser cannot leave this group. Delete the group if you no longer want to run it.');
+  }
+  const isOrganizer = actorUid === group.organizerUid;
+  if (!isOrganizer && actorUid !== targetUid) {
+    throw new Error('Only the organiser can remove another member.');
+  }
+
+  const inviteId = `${groupId}__${targetUid}`;
+  const invRef = doc(db, 'familyGroupInvitations', inviteId);
+  let invSnap;
+  try {
+    invSnap = await getDoc(invRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `familyGroupInvitations/${inviteId}`);
+  }
+  if (!invSnap.exists()) {
+    throw new Error('This person is not an active group member or invitee.');
+  }
+  const inv = invSnap.data() as FamilyGroupInvitationDoc;
+  if (inv.status !== 'pending' && inv.status !== 'accepted') {
+    throw new Error('This person is not an active group member or invitee.');
+  }
+
+  const batch = writeBatch(db);
+  batch.update(invRef, {
+    status: 'revoked',
+    acceptedAt: deleteField(),
+    updatedAt: serverTimestamp(),
+  });
+
+  if (group.memberUids.includes(targetUid) || inv.status === 'accepted') {
+    batch.update(doc(db, 'familyGroups', groupId), {
+      memberUids: arrayRemove(targetUid),
+      updatedAt: serverTimestamp(),
+    });
+    batch.delete(doc(db, 'familyGroups', groupId, 'members', targetUid));
+  }
+
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, groupPath);
+  }
+
+  await recordActivityEventFs(
+    actorUid,
+    isOrganizer ? 'FAMILY_GROUP_MEMBER_REMOVED' : 'FAMILY_GROUP_MEMBER_LEFT',
+    isOrganizer ? 'Removed a member from a family group' : 'Left a family group',
+    'family_group',
+  );
+  return { success: true, groupName: group.name };
+}
+
+export async function getFamilyGroupPostsFs(uid: string, groupId: string): Promise<FamilyGroupPost[]> {
+  requireVerifiedCurrentUser();
+  if (!uid) throw new Error('Sign in required.');
+  const postsPath = `familyGroups/${groupId}/posts`;
+  let postDocs: FamilyGroupPostDoc[] = [];
+  try {
+    const snap = await getDocs(collection(db, 'familyGroups', groupId, 'posts'));
+    postDocs = snap.docs.map((d) => d.data() as FamilyGroupPostDoc);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, postsPath);
+  }
+
+  const sortedPosts = [...postDocs].sort((a, b) => tsToMs(b.createdAt) - tsToMs(a.createdAt));
+
+  return Promise.all(
+    sortedPosts.map(async (post) => {
+      let commentDocs: FamilyGroupCommentDoc[] = [];
+      const commentsPath = `familyGroups/${groupId}/posts/${post.id}/comments`;
+      try {
+        const cSnap = await getDocs(
+          collection(db, 'familyGroups', groupId, 'posts', post.id, 'comments'),
+        );
+        commentDocs = cSnap.docs.map((d) => d.data() as FamilyGroupCommentDoc);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.LIST, commentsPath);
+      }
+
+      const comments: FamilyGroupComment[] = [...commentDocs]
+        .sort((a, b) => tsToMs(a.createdAt) - tsToMs(b.createdAt))
+        .map((c) => ({
+          id: c.numericId,
+          commentId: c.id,
+          body: c.body,
+          authorUserId: toNumericId(c.authorUid),
+          authorName: c.authorName || 'Group member',
+          createdAt: tsToIso(c.createdAt),
+        }));
+
+      return {
+        id: post.numericId,
+        postId: post.id,
+        body: post.body,
+        authorUserId: toNumericId(post.authorUid),
+        authorName: post.authorName || 'Group member',
+        createdAt: tsToIso(post.createdAt),
+        comments,
+      };
+    }),
+  );
+}
+
+export async function createFamilyGroupPostFs(
+  uid: string,
+  groupId: string,
+  body: string,
+): Promise<{ id: number; postId: string }> {
+  requireVerifiedCurrentUser();
+  const content = body.trim();
+  if (!content || content.length > 5000) {
+    throw new Error('Write a post up to 5,000 characters.');
+  }
+
+  let userSnap;
+  try {
+    userSnap = await getDoc(doc(db, 'users', uid));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `users/${uid}`);
+  }
+  const userDoc = userSnap.exists() ? (userSnap.data() as UserAccountDoc) : null;
+  const authorName =
+    clamp(userDoc?.displayName || `${userDoc?.firstName || ''} ${userDoc?.lastName || ''}`.trim(), 120) ||
+    'Group member';
+
+  const postId = generateSafeId('pst');
+  const numericId = toNumericId(postId);
+  const path = `familyGroups/${groupId}/posts/${postId}`;
+
+  try {
+    await setDoc(doc(db, 'familyGroups', groupId, 'posts', postId), {
+      id: postId,
+      numericId,
+      groupId,
+      authorUid: uid,
+      authorName,
+      body: content,
+      createdAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+
+  await recordActivityEventFs(uid, 'FAMILY_GROUP_POST_CREATED', 'Posted in a family group', 'family_group_post');
+  return { id: numericId, postId };
+}
+
+export async function createFamilyGroupCommentFs(
+  uid: string,
+  groupId: string,
+  postId: string,
+  body: string,
+): Promise<{ id: number; commentId: string }> {
+  requireVerifiedCurrentUser();
+  const content = body.trim();
+  if (!content || content.length > 2000) {
+    throw new Error('Write a reply up to 2,000 characters.');
+  }
+
+  let userSnap;
+  try {
+    userSnap = await getDoc(doc(db, 'users', uid));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `users/${uid}`);
+  }
+  const userDoc = userSnap.exists() ? (userSnap.data() as UserAccountDoc) : null;
+  const authorName =
+    clamp(userDoc?.displayName || `${userDoc?.firstName || ''} ${userDoc?.lastName || ''}`.trim(), 120) ||
+    'Group member';
+
+  const commentId = generateSafeId('cmt');
+  const numericId = toNumericId(commentId);
+  const path = `familyGroups/${groupId}/posts/${postId}/comments/${commentId}`;
+
+  try {
+    await setDoc(doc(db, 'familyGroups', groupId, 'posts', postId, 'comments', commentId), {
+      id: commentId,
+      numericId,
+      groupId,
+      postId,
+      authorUid: uid,
+      authorName,
+      body: content,
+      createdAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+
+  await recordActivityEventFs(uid, 'FAMILY_GROUP_COMMENT_CREATED', 'Replied to a family group post', 'family_group_post');
+  return { id: numericId, commentId };
+}
+
+async function getStoryOwnerDisplayNameFs(uid: string): Promise<string> {
+  try {
+    const snap = await getDoc(doc(db, 'users', uid));
+    if (snap.exists()) {
+      const u = snap.data() as UserAccountDoc;
+      const name = clamp(
+        u.displayName || `${u.firstName || ''} ${u.lastName || ''}`.trim() || 'GeoSmart member',
+        120,
+      );
+      if (name) return name;
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `users/${uid}`);
+  }
+  return 'GeoSmart member';
+}
+
+async function getConnectedFamilyUidsFs(uid: string): Promise<string[]> {
+  const members = await listOwnerSubcollection<FamilyMemberDoc>(uid, 'familyMembers');
+  const unique = new Set<string>([uid]);
+  for (const m of members) {
+    const linked = (m.linkedUid || '').trim();
+    if (linked && /^[a-zA-Z0-9_-]{1,128}$/.test(linked)) {
+      unique.add(linked);
+    }
+    if (unique.size >= 50) break;
+  }
+  return Array.from(unique);
+}
+
+export async function createFamilyStoryFs(
+  uid: string,
+  input: {
+    title: string;
+    description?: string | null;
+    storagePath: string;
+    contentType: string;
+    mediaType: 'audio' | 'video';
+    fileSize: number;
+    visibility: 'private' | 'family';
+  },
+): Promise<{ id: number; storyId: string }> {
+  requireVerifiedCurrentUser();
+  const storyId = generateSafeId('sty');
+  const numericId = toNumericId(storyId);
+  const ownerName = await getStoryOwnerDisplayNameFs(uid);
+  const cleanTitle = clamp(input.title, 120);
+  const cleanDescription = clamp(input.description, 1200);
+  const cleanContentType =
+    clamp(input.contentType, 80) || (input.mediaType === 'audio' ? 'audio/mp4' : 'video/mp4');
+  const cleanStoragePath = input.storagePath.trim();
+  const cleanFileSize = Math.max(1, Math.min(52428800, Math.floor(input.fileSize)));
+
+  const storyPayload = {
+    id: storyId,
+    numericId,
+    ownerUid: uid,
+    ownerName,
+    title: cleanTitle,
+    description: cleanDescription,
+    mediaType: input.mediaType,
+    contentType: cleanContentType,
+    fileSize: cleanFileSize,
+    storagePath: cleanStoragePath,
+    visibility: input.visibility,
+    createdAt: serverTimestamp(),
+  };
+
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'users', uid, 'stories', storyId), storyPayload);
+
+  if (input.visibility === 'family') {
+    const allowedUids = await getConnectedFamilyUidsFs(uid);
+    batch.set(doc(db, 'sharedFamilyStories', storyId), {
+      ...storyPayload,
+      visibility: 'family',
+      allowedUids,
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  const path = `users/${uid}/stories/${storyId}`;
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+
+  await recordActivityEventFs(
+    uid,
+    'FAMILY_STORY_CREATED',
+    input.visibility === 'family'
+      ? `Added and shared a family ${input.mediaType} story`
+      : `Saved a private ${input.mediaType} story`,
+    'family_story',
+    {
+      scope: 'family_story',
+      previous: 'private',
+      selected: input.visibility === 'family' ? 'shared' : 'private',
+    },
+  );
+
+  return { id: numericId, storyId };
+}
+
 export async function getFamilyStoriesFs(uid: string): Promise<FamilyStorySummary[]> {
-  const docs = await listOwnerSubcollection<StoryDoc>(uid, 'stories');
-  return [...docs]
+  const [ownerDocs, sharedDocs] = await Promise.all([
+    listOwnerSubcollection<StoryDoc>(uid, 'stories'),
+    (async () => {
+      try {
+        const snap = await getDocs(
+          query(collection(db, 'sharedFamilyStories'), where('allowedUids', 'array-contains', uid)),
+        );
+        return snap.docs.map((d) => d.data() as SharedFamilyStoryDoc);
+      } catch (error) {
+        handleFirestoreError(error, OperationType.LIST, 'sharedFamilyStories');
+      }
+    })(),
+  ]);
+
+  // Keep audience synced if owner's direct family connections changed since sharing.
+  const ownerSharedMap = new Map(sharedDocs.filter((d) => d.ownerUid === uid).map((d) => [d.id, d]));
+  const storiesNeedingAudienceSync = ownerDocs.filter(
+    (s) => s.visibility === 'family' && Boolean(s.storagePath),
+  );
+  if (storiesNeedingAudienceSync.length > 0) {
+    const currentAllowed = await getConnectedFamilyUidsFs(uid);
+    const currentAllowedKey = [...currentAllowed].sort().join(',');
+    for (const story of storiesNeedingAudienceSync) {
+      const mirror = ownerSharedMap.get(story.id);
+      if (mirror && [...(mirror.allowedUids || [])].sort().join(',') !== currentAllowedKey) {
+        await updateDoc(doc(db, 'sharedFamilyStories', story.id), {
+          allowedUids: currentAllowed,
+          ownerName: story.ownerName,
+          updatedAt: serverTimestamp(),
+        }).catch(() => {});
+      }
+    }
+  }
+
+  const merged = new Map<string, StoryDoc | SharedFamilyStoryDoc>();
+  for (const s of sharedDocs) {
+    merged.set(s.id, s);
+  }
+  for (const s of ownerDocs) {
+    merged.set(s.id, s);
+  }
+
+  return Array.from(merged.values())
     .sort((a, b) => tsToMs(b.createdAt) - tsToMs(a.createdAt))
     .map((s) => ({
       id: s.numericId,
+      storyId: s.id,
       ownerUserId: toNumericId(s.ownerUid),
+      ownerUid: s.ownerUid,
       ownerName: s.ownerName,
       title: s.title,
       description: s.description || null,
       mediaType: s.mediaType,
       contentType: s.contentType,
       fileSize: s.fileSize,
+      storagePath: s.storagePath,
       visibility: s.visibility,
       createdAt: tsToIso(s.createdAt),
-      isOwner: true,
+      isOwner: s.ownerUid === uid,
     }));
 }
 
-export async function deleteFamilyStoryFs(uid: string, storyNumericId: number): Promise<void> {
+export async function updateFamilyStorySharingFs(
+  uid: string,
+  storyNumericId: number,
+  visibility: 'private' | 'family',
+): Promise<{ success: boolean; visibility: 'private' | 'family' }> {
+  requireVerifiedCurrentUser();
+  const docs = await listOwnerSubcollection<StoryDoc>(uid, 'stories');
+  const target = docs.find((s) => s.numericId === storyNumericId);
+  if (!target) throw new Error('Story not found or permission denied.');
+  if (visibility === 'family' && !target.storagePath) {
+    throw new Error('This legacy story has no stored media file to share. Please re-upload it.');
+  }
+
+  const sharedRef = doc(db, 'sharedFamilyStories', target.id);
+  let sharedExists = false;
+  try {
+    const sharedSnap = await getDoc(sharedRef);
+    sharedExists = sharedSnap.exists();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `sharedFamilyStories/${target.id}`);
+  }
+
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'users', uid, 'stories', target.id), { visibility });
+
+  if (visibility === 'family') {
+    const allowedUids = await getConnectedFamilyUidsFs(uid);
+    const ownerName = target.ownerName || (await getStoryOwnerDisplayNameFs(uid));
+    if (sharedExists) {
+      batch.update(sharedRef, {
+        allowedUids,
+        ownerName,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      batch.set(sharedRef, {
+        id: target.id,
+        numericId: target.numericId,
+        ownerUid: uid,
+        ownerName,
+        title: clamp(target.title, 120),
+        description: clamp(target.description, 1200),
+        mediaType: target.mediaType,
+        contentType: clamp(target.contentType, 80) || 'application/octet-stream',
+        fileSize: Math.max(1, Math.min(52428800, Math.floor(target.fileSize || 1))),
+        storagePath: target.storagePath!,
+        visibility: 'family',
+        allowedUids,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } else if (sharedExists) {
+    batch.delete(sharedRef);
+  }
+
+  const path = `users/${uid}/stories/${target.id}`;
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+  if (target.visibility !== visibility) {
+    await recordActivityEventFs(
+      uid,
+      'FAMILY_STORY_SHARING_UPDATED',
+      visibility === 'family'
+        ? 'Shared a family story with direct connections'
+        : 'Made a family story private',
+      'family_story',
+      {
+        scope: 'family_story',
+        previous: target.visibility === 'family' ? 'shared' : 'private',
+        selected: visibility === 'family' ? 'shared' : 'private',
+      },
+    );
+  }
+  return { success: true, visibility };
+}
+
+export async function deleteFamilyStoryFs(
+  uid: string,
+  storyNumericId: number,
+): Promise<{ storyId: string; storagePath: string | null }> {
   requireVerifiedCurrentUser();
   const docs = await listOwnerSubcollection<StoryDoc>(uid, 'stories');
   const target = docs.find((s) => s.numericId === storyNumericId);
   if (!target) throw new Error('Story not found.');
+
+  const sharedRef = doc(db, 'sharedFamilyStories', target.id);
+  let sharedExists = false;
+  try {
+    const sharedSnap = await getDoc(sharedRef);
+    sharedExists = sharedSnap.exists();
+  } catch (error) {
+    handleFirestoreError(error, OperationType.GET, `sharedFamilyStories/${target.id}`);
+  }
+
+  const batch = writeBatch(db);
+  if (sharedExists) {
+    batch.delete(sharedRef);
+  }
+  batch.delete(doc(db, 'users', uid, 'stories', target.id));
+
   const path = `users/${uid}/stories/${target.id}`;
   try {
-    await deleteDoc(doc(db, 'users', uid, 'stories', target.id));
+    await batch.commit();
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, path);
   }
+
+  await recordActivityEventFs(
+    uid,
+    'FAMILY_STORY_DELETED',
+    `Deleted family story "${clamp(target.title, 80)}"`,
+    'family_story',
+  );
+
+  return { storyId: target.id, storagePath: target.storagePath || null };
 }
 
 export async function exportUserDataFs(uid: string): Promise<Record<string, unknown>> {
@@ -1802,6 +2905,43 @@ export async function exportUserDataFs(uid: string): Promise<Record<string, unkn
 
 export async function deleteUserAccountFs(uid: string): Promise<void> {
   requireVerifiedCurrentUser();
+
+  // Clean up family groups organized by or involving this user before removing /users/{uid}
+  try {
+    const groupSnap = await getDocs(
+      query(collection(db, 'familyGroups'), where('memberUids', 'array-contains', uid)),
+    );
+    for (const gDoc of groupSnap.docs) {
+      const g = gDoc.data() as FamilyGroupDoc;
+      if (g.organizerUid === uid) {
+        await deleteUserFamilyGroupFs(uid, g.id);
+      } else {
+        await removeFamilyGroupMemberFs(uid, g.id, uid).catch(() => {});
+      }
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'familyGroups');
+  }
+
+  // Delete sharedFamilyStories owned by this user before removing /users/{uid}/stories/*
+  try {
+    const sharedSnap = await getDocs(
+      query(collection(db, 'sharedFamilyStories'), where('allowedUids', 'array-contains', uid)),
+    );
+    const ownedSharedRefs = sharedSnap.docs
+      .filter((d) => (d.data() as SharedFamilyStoryDoc).ownerUid === uid)
+      .map((d) => d.ref);
+    for (let i = 0; i < ownedSharedRefs.length; i += 400) {
+      const batch = writeBatch(db);
+      for (const ref of ownedSharedRefs.slice(i, i + 400)) {
+        batch.delete(ref);
+      }
+      await batch.commit();
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'sharedFamilyStories');
+  }
+
   const subcollections = ['places', 'communities', 'familyMembers', 'activityEvents', 'stories'] as const;
   const docRefs: Array<ReturnType<typeof doc>> = [];
 

@@ -67,6 +67,18 @@ service cloud.firestore {
         && rel in ['parent', 'child', 'spouse', 'sibling', 'grandparent', 'grandchild', 'relative', 'other'];
     }
 
+    function isFamilyGroupMember(groupId) {
+      return isVerifiedUser()
+        && exists(/databases/$(database)/documents/familyGroups/$(groupId))
+        && request.auth.uid in get(/databases/$(database)/documents/familyGroups/$(groupId)).data.memberUids;
+    }
+
+    function isFamilyGroupOrganizer(groupId) {
+      return isVerifiedUser()
+        && exists(/databases/$(database)/documents/familyGroups/$(groupId))
+        && get(/databases/$(database)/documents/familyGroups/$(groupId)).data.organizerUid == request.auth.uid;
+    }
+
     // ---------------------------------------------------------
     // Validation Blueprints (Anti-Update-Gap Helpers)
     // ---------------------------------------------------------
@@ -277,6 +289,115 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidFamilyGroup(data, groupId) {
+      return data.keys().hasAll([
+          'id', 'numericId', 'name', 'description', 'organizerUid',
+          'organizerName', 'memberUids', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'numericId', 'name', 'description', 'organizerUid',
+          'organizerName', 'memberUids', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id == groupId
+        && data.numericId is int && data.numericId >= 1
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 100
+        && data.description is string && data.description.size() <= 1000
+        && isValidId(data.organizerUid)
+        && data.organizerName is string && data.organizerName.size() >= 1 && data.organizerName.size() <= 120
+        && data.memberUids is list
+        && data.memberUids.size() >= 1
+        && data.memberUids.size() <= 50
+        && data.memberUids[0] is string
+        && (data.organizerUid in data.memberUids)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFamilyGroupMemberRecord(data, groupId, memberUid) {
+      return data.keys().hasAll([
+          'uid', 'numericId', 'groupId', 'name', 'personNumericId',
+          'relationshipType', 'isOrganizer', 'joinedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'numericId', 'groupId', 'name', 'personNumericId',
+          'relationshipType', 'isOrganizer', 'joinedAt'
+        ])
+        && isValidId(data.uid) && data.uid == memberUid
+        && data.numericId is int && data.numericId >= 1
+        && isValidId(data.groupId) && data.groupId == groupId
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.personNumericId is int && data.personNumericId >= 0
+        && data.relationshipType is string && data.relationshipType.size() <= 24
+        && (data.relationshipType == 'self' || isValidRelationshipType(data.relationshipType))
+        && data.isOrganizer is bool
+        && data.joinedAt is timestamp;
+    }
+
+    function isValidFamilyGroupInvitation(data, inviteId) {
+      return data.keys().hasAll([
+          'id', 'numericId', 'groupId', 'groupName', 'groupDescription',
+          'inviterUid', 'inviterName', 'inviteeUid', 'inviteeName',
+          'personNumericId', 'relationshipType', 'status', 'expiresAt',
+          'invitedAt', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'numericId', 'groupId', 'groupName', 'groupDescription',
+          'inviterUid', 'inviterName', 'inviteeUid', 'inviteeName',
+          'personNumericId', 'relationshipType', 'status', 'expiresAt',
+          'acceptedAt', 'invitedAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id == inviteId
+        && data.numericId is int && data.numericId >= 1
+        && isValidId(data.groupId)
+        && data.groupName is string && data.groupName.size() >= 1 && data.groupName.size() <= 100
+        && data.groupDescription is string && data.groupDescription.size() <= 1000
+        && isValidId(data.inviterUid)
+        && data.inviterName is string && data.inviterName.size() >= 1 && data.inviterName.size() <= 120
+        && isValidId(data.inviteeUid)
+        && data.inviteeName is string && data.inviteeName.size() >= 1 && data.inviteeName.size() <= 120
+        && data.personNumericId is int && data.personNumericId >= 1
+        && isValidRelationshipType(data.relationshipType)
+        && data.status is string && data.status.size() <= 16 && data.status in ['pending', 'accepted', 'declined', 'revoked']
+        && data.expiresAt is timestamp
+        && (!('acceptedAt' in data.keys()) || data.acceptedAt is timestamp)
+        && data.invitedAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFamilyGroupPost(data, groupId, postId) {
+      return data.keys().hasAll([
+          'id', 'numericId', 'groupId', 'authorUid', 'authorName', 'body', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'numericId', 'groupId', 'authorUid', 'authorName', 'body', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id == postId
+        && data.numericId is int && data.numericId >= 1
+        && isValidId(data.groupId) && data.groupId == groupId
+        && isValidId(data.authorUid)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 120
+        && data.body is string && data.body.size() >= 1 && data.body.size() <= 5000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidFamilyGroupComment(data, groupId, postId, commentId) {
+      return data.keys().hasAll([
+          'id', 'numericId', 'groupId', 'postId', 'authorUid', 'authorName', 'body', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'numericId', 'groupId', 'postId', 'authorUid', 'authorName', 'body', 'createdAt'
+        ])
+        && isValidId(data.id) && data.id == commentId
+        && data.numericId is int && data.numericId >= 1
+        && isValidId(data.groupId) && data.groupId == groupId
+        && isValidId(data.postId) && data.postId == postId
+        && isValidId(data.authorUid)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 120
+        && data.body is string && data.body.size() >= 1 && data.body.size() <= 2000
+        && data.createdAt is timestamp;
+    }
+
     function isValidActivityEvent(data, uid, eventId) {
       return data.keys().hasAll([
           'id', 'numericId', 'ownerUid', 'eventType', 'summary', 'targetType',
@@ -305,7 +426,7 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'id', 'numericId', 'ownerUid', 'ownerName', 'title', 'description',
-          'mediaType', 'contentType', 'fileSize', 'visibility', 'createdAt'
+          'mediaType', 'contentType', 'fileSize', 'storagePath', 'visibility', 'createdAt'
         ])
         && isValidId(data.id) && data.id == storyId
         && data.numericId is int && data.numericId >= 1
@@ -316,8 +437,50 @@ service cloud.firestore {
         && data.mediaType is string && data.mediaType.size() <= 16 && data.mediaType in ['audio', 'video']
         && data.contentType is string && data.contentType.size() <= 80
         && data.fileSize is int && data.fileSize >= 0 && data.fileSize <= 52428800
+        && (!('storagePath' in data.keys()) || (
+          data.storagePath is string
+          && data.storagePath.size() >= 3
+          && data.storagePath.size() <= 256
+          && data.storagePath.matches('^[a-zA-Z0-9_\\-]+/[a-zA-Z0-9_\\-]+$')
+          && data.storagePath.split('/')[0] == uid
+        ))
         && data.visibility is string && data.visibility.size() <= 16 && data.visibility in ['private', 'family']
         && data.createdAt is timestamp;
+    }
+
+    function isValidSharedFamilyStory(data, storyId) {
+      return data.keys().hasAll([
+          'id', 'numericId', 'ownerUid', 'ownerName', 'title', 'description',
+          'mediaType', 'contentType', 'fileSize', 'storagePath', 'visibility',
+          'allowedUids', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'numericId', 'ownerUid', 'ownerName', 'title', 'description',
+          'mediaType', 'contentType', 'fileSize', 'storagePath', 'visibility',
+          'allowedUids', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id) && data.id == storyId
+        && data.numericId is int && data.numericId >= 1
+        && isValidId(data.ownerUid)
+        && data.ownerName is string && data.ownerName.size() >= 1 && data.ownerName.size() <= 120
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && data.description is string && data.description.size() <= 1200
+        && data.mediaType is string && data.mediaType.size() <= 16 && data.mediaType in ['audio', 'video']
+        && data.contentType is string && data.contentType.size() >= 1 && data.contentType.size() <= 80
+        && data.fileSize is int && data.fileSize >= 1 && data.fileSize <= 52428800
+        && data.storagePath is string
+        && data.storagePath.size() >= 3
+        && data.storagePath.size() <= 256
+        && data.storagePath.matches('^[a-zA-Z0-9_\\-]+/[a-zA-Z0-9_\\-]+$')
+        && data.storagePath.split('/')[0] == data.ownerUid
+        && data.visibility is string && data.visibility.size() <= 16 && data.visibility == 'family'
+        && data.allowedUids is list
+        && data.allowedUids.size() >= 1
+        && data.allowedUids.size() <= 50
+        && data.allowedUids[0] is string
+        && (data.ownerUid in data.allowedUids)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
     }
 
     function isValidAdminAccessLog(data, logId) {
@@ -395,7 +558,7 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          // Action: Owner updating profile, onboarding, or notification preferences (cannot escalate role/status; non-admins with stale admin role can demote to user)
+          // Action: Owner updating profile, onboarding, or notification preferences
           (
             isOwner(uid)
             && incoming().status == existing().status
@@ -411,7 +574,7 @@ service cloud.firestore {
             ])
           )
           ||
-          // Action: Admin suspending/reactivating account or bootstrap admin demoting a stale admin role to user
+          // Action: Admin suspending/reactivating account or bootstrap admin demoting a stale admin role
           (
             isAdmin()
             && (
@@ -571,13 +734,80 @@ service cloud.firestore {
         allow create: if isValidId(uid) && isValidId(storyId)
           && isOwner(uid)
           && isValidFamilyStoryRecord(incoming(), uid, storyId)
+          && ('storagePath' in incoming().keys())
           && incoming().createdAt == request.time
-          && exists(/databases/$(database)/documents/users/$(uid));
-        allow update: if false;
+          && exists(/databases/$(database)/documents/users/$(uid))
+          && (
+            incoming().visibility == 'private'
+            || getAfter(/databases/$(database)/documents/sharedFamilyStories/$(storyId)).data.ownerUid == uid
+          );
+        allow update: if isValidId(uid) && isValidId(storyId)
+          && isOwner(uid)
+          && isValidFamilyStoryRecord(incoming(), uid, storyId)
+          && incoming().id == existing().id
+          && incoming().numericId == existing().numericId
+          && incoming().ownerUid == existing().ownerUid
+          && (!('storagePath' in existing().keys()) || incoming().storagePath == existing().storagePath)
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['visibility'])
+          && exists(/databases/$(database)/documents/users/$(uid))
+          && (
+            (
+              incoming().visibility == 'private'
+              && !existsAfter(/databases/$(database)/documents/sharedFamilyStories/$(storyId))
+            )
+            || (
+              incoming().visibility == 'family'
+              && (
+                !('storagePath' in existing().keys())
+                || getAfter(/databases/$(database)/documents/sharedFamilyStories/$(storyId)).data.ownerUid == uid
+              )
+            )
+          );
         allow delete: if isValidId(uid) && isValidId(storyId)
           && (isOwner(uid) || isAdmin())
-          && exists(/databases/$(database)/documents/users/$(uid));
+          && exists(/databases/$(database)/documents/users/$(uid))
+          && !existsAfter(/databases/$(database)/documents/sharedFamilyStories/$(storyId));
       }
+    }
+
+    // ---------------------------------------------------------
+    // Family-Shared Stories (Non-PII, Bounded Audience)
+    // ---------------------------------------------------------
+    match /sharedFamilyStories/{storyId} {
+      allow get: if isValidId(storyId) && (
+        isAdmin()
+        || (isVerifiedUser() && (
+          existing().ownerUid == request.auth.uid
+          || (request.auth.uid in existing().allowedUids)
+        ))
+      );
+      allow list: if isBootstrapAdmin()
+        || (isVerifiedUser() && (request.auth.uid in existing().allowedUids));
+      allow create: if isValidId(storyId)
+        && isVerifiedUser()
+        && isValidSharedFamilyStory(incoming(), storyId)
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/stories/$(storyId)).data.visibility == 'family'
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/stories/$(storyId)).data.storagePath == incoming().storagePath;
+      allow update: if isValidId(storyId)
+        && isValidSharedFamilyStory(incoming(), storyId)
+        && incoming().id == existing().id
+        && incoming().numericId == existing().numericId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().storagePath == existing().storagePath
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && isVerifiedUser()
+        && existing().ownerUid == request.auth.uid
+        && incoming().diff(existing()).affectedKeys().hasOnly(['allowedUids', 'ownerName', 'updatedAt']);
+      allow delete: if isValidId(storyId) && (
+        isAdmin()
+        || (isVerifiedUser() && existing().ownerUid == request.auth.uid)
+      );
     }
 
     // ---------------------------------------------------------
@@ -678,6 +908,253 @@ service cloud.firestore {
                 && getAfter(/databases/$(database)/documents/users/$(existing().inviterUid)/familyMembers/$(existing().memberId)).data.linkedUid == request.auth.uid
               )
             )
+          )
+        );
+      allow delete: if isValidId(inviteId) && (
+        isAdmin()
+        || (isVerifiedUser() && existing().inviterUid == request.auth.uid)
+      );
+    }
+
+    // ---------------------------------------------------------
+    // Family Groups, Members, Discussions & Group Invitations
+    // ---------------------------------------------------------
+    match /familyGroups/{groupId} {
+      allow get: if isValidId(groupId) && (
+        isAdmin()
+        || (isVerifiedUser() && request.auth.uid in existing().memberUids)
+      );
+      allow list: if isBootstrapAdmin()
+        || (isVerifiedUser() && request.auth.uid in existing().memberUids);
+      allow create: if isValidId(groupId)
+        && isVerifiedUser()
+        && isValidFamilyGroup(incoming(), groupId)
+        && incoming().organizerUid == request.auth.uid
+        && incoming().memberUids.size() == 1
+        && incoming().memberUids[0] == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      allow update: if isValidId(groupId)
+        && isValidFamilyGroup(incoming(), groupId)
+        && incoming().id == existing().id
+        && incoming().numericId == existing().numericId
+        && incoming().organizerUid == existing().organizerUid
+        && incoming().organizerName == existing().organizerName
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/users/$(existing().organizerUid))
+        && (
+          isAdmin()
+          ||
+          // Tier 1a (Organiser): Rename / update group description
+          (
+            isVerifiedUser()
+            && existing().organizerUid == request.auth.uid
+            && incoming().memberUids == existing().memberUids
+            && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'description', 'updatedAt'])
+          )
+          ||
+          // Tier 1b (Organiser): Remove an accepted member atomically with revoking their invitation
+          (
+            isVerifiedUser()
+            && existing().organizerUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
+            && existing().memberUids.hasAll(incoming().memberUids)
+            && incoming().memberUids.size() == existing().memberUids.size() - 1
+            && (existing().organizerUid in incoming().memberUids)
+          )
+          ||
+          // Tier 2a (Verified Invitee): Join group atomically when accepting group invitation
+          (
+            isVerifiedUser()
+            && !(request.auth.uid in existing().memberUids)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
+            && incoming().memberUids.hasAll(existing().memberUids)
+            && incoming().memberUids.size() == existing().memberUids.size() + 1
+            && (request.auth.uid in incoming().memberUids)
+            && getAfter(/databases/$(database)/documents/familyGroupInvitations/$(groupId + '__' + request.auth.uid)).data.status == 'accepted'
+          )
+          ||
+          // Tier 2b (Accepted Non-Organiser Member): Leave group atomically with revoking own invitation
+          (
+            isVerifiedUser()
+            && request.auth.uid != existing().organizerUid
+            && (request.auth.uid in existing().memberUids)
+            && !(request.auth.uid in incoming().memberUids)
+            && existing().memberUids.hasAll(incoming().memberUids)
+            && incoming().memberUids.size() == existing().memberUids.size() - 1
+            && incoming().diff(existing()).affectedKeys().hasOnly(['memberUids', 'updatedAt'])
+            && getAfter(/databases/$(database)/documents/familyGroupInvitations/$(groupId + '__' + request.auth.uid)).data.status == 'revoked'
+          )
+        );
+      allow delete: if isValidId(groupId) && (
+        isAdmin()
+        || (isVerifiedUser() && existing().organizerUid == request.auth.uid)
+      );
+
+      match /members/{memberUid} {
+        allow get: if isValidId(groupId) && isValidId(memberUid)
+          && (isAdmin() || isFamilyGroupMember(groupId));
+        allow list: if isBootstrapAdmin() || isFamilyGroupMember(groupId);
+        allow create: if isValidId(groupId) && isValidId(memberUid)
+          && isVerifiedUser()
+          && isValidFamilyGroupMemberRecord(incoming(), groupId, memberUid)
+          && incoming().joinedAt == request.time
+          && (
+            (
+              memberUid == request.auth.uid
+              && incoming().isOrganizer == true
+              && incoming().relationshipType == 'self'
+              && getAfter(/databases/$(database)/documents/familyGroups/$(groupId)).data.organizerUid == request.auth.uid
+            )
+            ||
+            (
+              memberUid == request.auth.uid
+              && incoming().isOrganizer == false
+              && (request.auth.uid in getAfter(/databases/$(database)/documents/familyGroups/$(groupId)).data.memberUids)
+              && getAfter(/databases/$(database)/documents/familyGroupInvitations/$(groupId + '__' + request.auth.uid)).data.status == 'accepted'
+            )
+          );
+        allow update: if false;
+        allow delete: if isValidId(groupId) && isValidId(memberUid) && (
+          isAdmin()
+          || isFamilyGroupOrganizer(groupId)
+          || (isVerifiedUser() && memberUid == request.auth.uid && !isFamilyGroupOrganizer(groupId))
+        );
+      }
+
+      match /posts/{postId} {
+        allow get: if isValidId(groupId) && isValidId(postId)
+          && (isAdmin() || isFamilyGroupMember(groupId));
+        allow list: if isBootstrapAdmin() || isFamilyGroupMember(groupId);
+        allow create: if isValidId(groupId) && isValidId(postId)
+          && isVerifiedUser()
+          && isValidFamilyGroupPost(incoming(), groupId, postId)
+          && incoming().authorUid == request.auth.uid
+          && incoming().createdAt == request.time
+          && isFamilyGroupMember(groupId);
+        allow update: if false;
+        allow delete: if isValidId(groupId) && isValidId(postId) && (
+          isAdmin()
+          || isFamilyGroupOrganizer(groupId)
+          || (isFamilyGroupMember(groupId) && existing().authorUid == request.auth.uid)
+        );
+
+        match /comments/{commentId} {
+          allow get: if isValidId(groupId) && isValidId(postId) && isValidId(commentId)
+            && (isAdmin() || isFamilyGroupMember(groupId));
+          allow list: if isBootstrapAdmin() || isFamilyGroupMember(groupId);
+          allow create: if isValidId(groupId) && isValidId(postId) && isValidId(commentId)
+            && isVerifiedUser()
+            && isValidFamilyGroupComment(incoming(), groupId, postId, commentId)
+            && incoming().authorUid == request.auth.uid
+            && incoming().createdAt == request.time
+            && isFamilyGroupMember(groupId)
+            && exists(/databases/$(database)/documents/familyGroups/$(groupId)/posts/$(postId));
+          allow update: if false;
+          allow delete: if isValidId(groupId) && isValidId(postId) && isValidId(commentId) && (
+            isAdmin()
+            || isFamilyGroupOrganizer(groupId)
+            || (isFamilyGroupMember(groupId) && existing().authorUid == request.auth.uid)
+          );
+        }
+      }
+    }
+
+    match /familyGroupInvitations/{inviteId} {
+      allow get: if isValidId(inviteId) && (
+        isAdmin()
+        || (isVerifiedUser() && (
+          existing().inviterUid == request.auth.uid
+          || existing().inviteeUid == request.auth.uid
+        ))
+      );
+      allow list: if isBootstrapAdmin()
+        || (isVerifiedUser() && existing().inviterUid == request.auth.uid)
+        || (isVerifiedUser() && existing().inviteeUid == request.auth.uid);
+      allow create: if isValidId(inviteId)
+        && isVerifiedUser()
+        && isValidFamilyGroupInvitation(incoming(), inviteId)
+        && inviteId == (incoming().groupId + '__' + incoming().inviteeUid)
+        && incoming().inviterUid == request.auth.uid
+        && incoming().inviteeUid != request.auth.uid
+        && incoming().status == 'pending'
+        && !('acceptedAt' in incoming().keys())
+        && incoming().invitedAt == request.time
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && getAfter(/databases/$(database)/documents/familyGroups/$(incoming().groupId)).data.organizerUid == request.auth.uid;
+      allow update: if isValidId(inviteId)
+        && isValidFamilyGroupInvitation(incoming(), inviteId)
+        && incoming().id == existing().id
+        && incoming().numericId == existing().numericId
+        && incoming().groupId == existing().groupId
+        && incoming().inviterUid == existing().inviterUid
+        && incoming().inviteeUid == existing().inviteeUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          ||
+          // Tier 1a (Organiser): Re-invite a declined/revoked or expired pending invitee
+          (
+            isVerifiedUser()
+            && existing().inviterUid == request.auth.uid
+            && existing().status in ['declined', 'revoked', 'pending']
+            && incoming().status == 'pending'
+            && !('acceptedAt' in incoming().keys())
+            && incoming().invitedAt == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'groupName', 'groupDescription', 'inviterName', 'inviteeName',
+              'personNumericId', 'relationshipType', 'status', 'expiresAt',
+              'invitedAt', 'acceptedAt', 'updatedAt'
+            ])
+          )
+          ||
+          // Tier 1b (Organiser): Cancel pending invitation or revoke accepted membership
+          (
+            isVerifiedUser()
+            && existing().inviterUid == request.auth.uid
+            && existing().status in ['pending', 'accepted']
+            && incoming().status == 'revoked'
+            && !('acceptedAt' in incoming().keys())
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedAt', 'updatedAt'])
+          )
+          ||
+          // Tier 2a (Invitee): Accept non-expired pending invitation atomically with joining familyGroups.memberUids
+          (
+            isVerifiedUser()
+            && existing().inviteeUid == request.auth.uid
+            && existing().status == 'pending'
+            && existing().expiresAt > request.time
+            && incoming().status == 'accepted'
+            && incoming().acceptedAt == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedAt', 'updatedAt'])
+            && (request.auth.uid in getAfter(/databases/$(database)/documents/familyGroups/$(existing().groupId)).data.memberUids)
+          )
+          ||
+          // Tier 2b (Invitee): Decline non-expired pending invitation
+          (
+            isVerifiedUser()
+            && existing().inviteeUid == request.auth.uid
+            && existing().status == 'pending'
+            && existing().expiresAt > request.time
+            && incoming().status == 'declined'
+            && !('acceptedAt' in incoming().keys())
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedAt', 'updatedAt'])
+          )
+          ||
+          // Tier 2c (Accepted Member): Leave group atomically with removal from familyGroups.memberUids
+          (
+            isVerifiedUser()
+            && existing().inviteeUid == request.auth.uid
+            && existing().status == 'accepted'
+            && incoming().status == 'revoked'
+            && !('acceptedAt' in incoming().keys())
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'acceptedAt', 'updatedAt'])
+            && !(request.auth.uid in getAfter(/databases/$(database)/documents/familyGroups/$(existing().groupId)).data.memberUids)
           )
         );
       allow delete: if isValidId(inviteId) && (

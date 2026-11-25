@@ -27,6 +27,7 @@ import { FamilyMemberDetailModal } from './FamilyMemberDetailModal.tsx';
 import { KinshipDiscoveryBanner } from './KinshipDiscoveryBanner.tsx';
 import { FamilyInvitationsModal } from './FamilyInvitationsModal.tsx';
 import { FamilyStoriesView } from './FamilyStoriesView.tsx';
+import { FamilyGroupsView } from './FamilyGroupsView.tsx';
 import { useInvitationNotifications } from './InvitationNotificationsContext.tsx';
 import { familyGenderOptions, getRelationshipLabel, getRelationshipOptions } from '../lib/family-relationships.ts';
 import {
@@ -37,8 +38,8 @@ import {
 } from '../lib/firestore-repo.ts';
 
 interface FamilyViewProps {
-  activeSubView?: 'overview' | 'tree' | 'invitations' | 'stories';
-  onSubViewChange?: (view: 'overview' | 'tree' | 'invitations' | 'stories') => void;
+  activeSubView?: 'overview' | 'tree' | 'groups' | 'invitations' | 'stories';
+  onSubViewChange?: (view: 'overview' | 'tree' | 'groups' | 'invitations' | 'stories') => void;
 }
 
 type FamilyOverviewView =
@@ -89,9 +90,9 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
   const { pendingCount, hasUnreadActivity, alertsEnabled, markInvitationActivityRead, refreshInvitationNotifications } = useInvitationNotifications();
 
   // Sub-view: 'overview' (My Family page with Family Overview) vs 'tree' (visual tree entry point)
-  const [internalSubView, setInternalSubView] = useState<'overview' | 'tree' | 'invitations' | 'stories'>('overview');
+  const [internalSubView, setInternalSubView] = useState<'overview' | 'tree' | 'groups' | 'invitations' | 'stories'>('overview');
   const subView = activeSubView ?? internalSubView;
-  const setSubView = (view: 'overview' | 'tree' | 'invitations' | 'stories') => {
+  const setSubView = (view: 'overview' | 'tree' | 'groups' | 'invitations' | 'stories') => {
     if (activeSubView === undefined) setInternalSubView(view);
     onSubViewChange?.(view);
   };
@@ -402,6 +403,8 @@ export const FamilyView: React.FC<FamilyViewProps> = ({ activeSubView, onSubView
       {/* SUBVIEW 1: Family Tree Visualizer (Sub-view under My Family) */}
       {subView === 'invitations' ? (
         null
+      ) : subView === 'groups' ? (
+        <FamilyGroupsView />
       ) : subView === 'stories' ? (
         <FamilyStoriesView />
       ) : subView === 'tree' ? (

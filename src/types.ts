@@ -40,13 +40,16 @@ export type VisibilitySetting = 'private' | 'shared' | 'public';
 
 export interface FamilyStorySummary {
   id: number;
+  storyId?: string;
   ownerUserId: number;
+  ownerUid?: string;
   ownerName: string;
   title: string;
   description: string | null;
   mediaType: 'audio' | 'video';
   contentType: string;
   fileSize: number;
+  storagePath?: string;
   visibility: 'private' | 'family';
   createdAt: string;
   isOwner: boolean;
@@ -263,3 +266,58 @@ export interface AdminAccessLogEntry {
   result: 'SUCCESS' | 'DENIED' | 'ERROR';
   timestamp: string;
 }
+
+export interface FamilyGroupMember {
+  userId: number;
+  userUid: string;
+  name: string;
+  personId: number | null;
+  relationshipType: string;
+  joinedAt: string;
+  status: 'pending' | 'accepted';
+  isOrganizer: boolean;
+  isCurrentUser: boolean;
+}
+
+export interface FamilyGroup {
+  id: number;
+  groupId: string;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  members: FamilyGroupMember[];
+  isOwner: boolean;
+}
+
+export interface FamilyGroupInvitationSummary {
+  id: number;
+  invitationId: string;
+  groupId: string;
+  groupNumericId: number;
+  groupName: string;
+  groupDescription: string | null;
+  inviterUserId: number;
+  inviterName: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface FamilyGroupComment {
+  id: number;
+  commentId: string;
+  body: string;
+  authorUserId: number;
+  authorName: string;
+  createdAt: string;
+}
+
+export interface FamilyGroupPost {
+  id: number;
+  postId: string;
+  body: string;
+  authorUserId: number;
+  authorName: string;
+  createdAt: string;
+  comments: FamilyGroupComment[];
+}
+

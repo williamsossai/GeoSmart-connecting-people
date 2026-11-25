@@ -29,10 +29,6 @@ import {
   connectRegisteredUserToPerson,
   getKinshipDiscoverySuggestions,
   claimDiscoveredPerson,
-  getFamilyStories,
-  createFamilyStory,
-  getFamilyStoryStoragePath,
-  deleteFamilyStory,
   exportUserData,
   deleteUserAccount,
   getAdminMetrics,
@@ -47,6 +43,8 @@ import {
 import { db, shouldUseMockDatabase } from './src/db/index.ts';
 import { sql } from 'drizzle-orm';
 import { CountryStateCity } from '@tansuasici/country-state-city';
+import firebaseConfig from './firebase-applet-config.json';
+import { adminAuth } from './src/lib/firebase-admin.ts';
 import {
   deleteFamilyStoryObject,
   fetchFamilyStoryObject,
@@ -439,84 +437,214 @@ app.get('/api/family/tree', requireAuth, async (req: AuthRequest, res) => {
   }
 });
 
-app.get('/api/family/stories', requireAuth, async (req: AuthRequest, res) => {
+const SAFE_DOC_ID_RE = /^[a-zA-Z0-9_-]{1,128}$/;
+const SAFE_STORAGE_PATH_RE = /^[a-zA-Z0-9_-]{1,128}\/[a-zA-Z0-9_-]{1,128}$/;
+const ALLOWED_STORY_MIME_TYPES = new Set([
+  'audio/mp4',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/webm',
+  'audio/x-m4a',
+  'video/mp4',
+  'video/quicktime',
+  'video/webm',
+]);
+
+interface FirebaseAuthRequest extends express.Request {
+  firebaseUid?: string;
+  firebaseToken?: string;
+  firebaseEmail?: string;
+}
+
+async function requireFirebaseVerifiedAuth(
+  req: FirebaseAuthRequest,
+  res: express.Response,
+  next: express.NextFunction,
+) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Authentication required.' });
+  }
+  const token = authHeader.slice('Bearer '.length).trim();
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication token is missing.' });
+  }
   try {
-    const storage = await getFamilyStoryStorageStatus();
-    const stories = await getFamilyStories(req.dbUser!.id);
-    res.json({ stories, storageReady: storage.ready, storageMessage: storage.message });
+    const decoded = await adminAuth.verifyIdToken(token);
+    if (!decoded.email || decoded.email_verified !== true || !SAFE_DOC_ID_RE.test(decoded.uid)) {
+      return res.status(403).json({ error: 'A verified email address is required for family stories.' });
+    }
+    req.firebaseUid = decoded.uid;
+    req.firebaseToken = token;
+    req.firebaseEmail = decoded.email;
+    return next();
   } catch (error) {
-    console.error('Error in GET /api/family/stories:', error);
-    res.status(503).json({ error: 'Family stories are not available yet. Apply the database migrations and configure private media storage.' });
+    console.error('Firebase token verification error for story media:', error);
+    return res.status(401).json({ error: 'Your session expired. Sign in again and retry.' });
+  }
+}
+
+type FirestoreRestDoc = {
+  fields?: {
+    ownerUid?: { stringValue?: string };
+    storagePath?: { stringValue?: string };
+    visibility?: { stringValue?: string };
+    contentType?: { stringValue?: string };
+  };
+};
+
+async function fetchFirestoreDocAsCaller(
+  docPath: string,
+  idToken: string,
+): Promise<{ status: number; doc: FirestoreRestDoc | null }> {
+  const databaseId = firebaseConfig.firestoreDatabaseId || '(default)';
+  const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseConfig.projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${docPath}`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${idToken}`,
+    },
+  });
+  if (!response.ok) {
+    return { status: response.status, doc: null };
+  }
+  const data = (await response.json()) as FirestoreRestDoc;
+  return { status: response.status, doc: data };
+}
+
+app.get('/api/family/stories/storage-status', requireFirebaseVerifiedAuth, async (_req: FirebaseAuthRequest, res) => {
+  try {
+    const status = await getFamilyStoryStorageStatus();
+    res.json(status);
+  } catch (error) {
+    console.error('Error in GET /api/family/stories/storage-status:', error);
+    res.json({
+      configured: false,
+      ready: false,
+      message: 'Private media storage status could not be verified right now.',
+    });
   }
 });
 
 app.post(
-  '/api/family/stories',
-  requireAuth,
+  '/api/family/stories/media',
+  requireFirebaseVerifiedAuth,
   express.raw({ type: ['audio/*', 'video/*'], limit: '50mb' }),
-  async (req: AuthRequest, res) => {
+  async (req: FirebaseAuthRequest, res) => {
     let storagePath: string | null = null;
-    let uploaded = false;
     try {
       const storage = await getFamilyStoryStorageStatus();
-      if (!storage.ready) return res.status(503).json({ error: storage.message || 'Private media storage is unavailable.' });
+      if (!storage.ready) {
+        return res.status(503).json({ error: storage.message || 'Private media storage is unavailable.' });
+      }
       if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
         return res.status(400).json({ error: 'Choose an audio or video file to upload.' });
       }
-      const decodeStoryHeader = (value: string | undefined) => {
-        if (!value) return '';
-        try { return decodeURIComponent(value).trim(); } catch { return value.trim(); }
-      };
-      const title = decodeStoryHeader(req.header('x-story-title'));
-      const description = decodeStoryHeader(req.header('x-story-description'));
-      const visibility = String(req.header('x-story-visibility') || 'private');
-      const consentConfirmed = req.header('x-story-consent') === 'true';
+      if (req.body.length > 50 * 1024 * 1024) {
+        return res.status(400).json({ error: 'Choose a file smaller than 50 MB.' });
+      }
       const contentType = String(req.header('content-type') || '').split(';')[0].trim().toLowerCase();
-      const allowedTypes = new Set([
-        'audio/mp4', 'audio/mpeg', 'audio/ogg', 'audio/webm', 'audio/x-m4a',
-        'video/mp4', 'video/quicktime', 'video/webm',
-      ]);
-      if (!title || title.length > 120) return res.status(400).json({ error: 'Enter a title up to 120 characters.' });
-      if (description.length > 1200) return res.status(400).json({ error: 'Description must be 1,200 characters or fewer.' });
-      if (!allowedTypes.has(contentType)) return res.status(400).json({ error: 'Use an MP4, WebM, MP3, OGG, M4A, or QuickTime audio/video file.' });
-      if (visibility !== 'private' && visibility !== 'family') return res.status(400).json({ error: 'Choose private or direct family sharing.' });
-      if (!consentConfirmed) return res.status(400).json({ error: 'Confirm you have permission from living people featured in this story.' });
+      if (!ALLOWED_STORY_MIME_TYPES.has(contentType)) {
+        return res.status(400).json({
+          error: 'Use an MP4, WebM, MP3, OGG, M4A, or QuickTime audio/video file.',
+        });
+      }
 
-      const userId = req.dbUser!.id;
-      storagePath = `${userId}/${randomUUID()}`;
+      const uid = req.firebaseUid!;
+      storagePath = `${uid}/${randomUUID()}`;
+      if (!SAFE_STORAGE_PATH_RE.test(storagePath)) {
+        return res.status(400).json({ error: 'Invalid storage path.' });
+      }
+
       await uploadFamilyStoryObject(storagePath, contentType, req.body);
-      uploaded = true;
-      const result = await createFamilyStory(userId, {
-        title,
-        description,
+      res.status(201).json({
         storagePath,
         contentType,
         mediaType: contentType.startsWith('audio/') ? 'audio' : 'video',
         fileSize: req.body.length,
-        visibility: visibility as 'private' | 'family',
-        consentVersion: 'family-story-consent-v1',
       });
-      res.status(201).json(result);
-    } catch (error: any) {
-      if (uploaded && storagePath) {
-        try { await deleteFamilyStoryObject(storagePath); } catch (cleanupError) {
-          console.error('Could not clean up an incomplete family story upload:', cleanupError);
-        }
+    } catch (error) {
+      if (storagePath) {
+        await deleteFamilyStoryObject(storagePath).catch(() => {});
       }
-      console.error('Error in POST /api/family/stories:', error);
-      res.status(500).json({ error: 'Could not save this story. Please try again.' });
+      console.error('Error in POST /api/family/stories/media:', error);
+      res.status(500).json({ error: 'Could not upload this media file. Please try again.' });
     }
   },
 );
 
-app.get('/api/family/stories/:id/media', requireAuth, async (req: AuthRequest, res) => {
+app.delete('/api/family/stories/media', requireFirebaseVerifiedAuth, async (req: FirebaseAuthRequest, res) => {
   try {
-    const storyId = Number.parseInt(req.params.id, 10);
-    if (!Number.isInteger(storyId) || storyId < 1) return res.status(400).json({ error: 'A valid story is required.' });
-    const storagePath = await getFamilyStoryStoragePath(req.dbUser!.id, storyId);
+    const rawPath =
+      typeof req.body?.storagePath === 'string'
+        ? req.body.storagePath
+        : typeof req.query?.storagePath === 'string'
+          ? req.query.storagePath
+          : '';
+    const storagePath = rawPath.trim();
+    if (!SAFE_STORAGE_PATH_RE.test(storagePath)) {
+      return res.status(400).json({ error: 'A valid storage path is required.' });
+    }
+    if (!storagePath.startsWith(`${req.firebaseUid}/`)) {
+      return res.status(403).json({ error: 'You can only delete your own story media.' });
+    }
+    await deleteFamilyStoryObject(storagePath);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error in DELETE /api/family/stories/media:', error);
+    res.status(500).json({ error: 'Could not remove stored media object.' });
+  }
+});
+
+app.get('/api/family/stories/:storyDocId/media', requireFirebaseVerifiedAuth, async (req: FirebaseAuthRequest, res) => {
+  try {
+    const storyDocId = String(req.params.storyDocId || '').trim();
+    if (!SAFE_DOC_ID_RE.test(storyDocId)) {
+      return res.status(400).json({ error: 'A valid story is required.' });
+    }
+    const requestedOwnerUid = typeof req.query.ownerUid === 'string' ? req.query.ownerUid.trim() : '';
+    if (requestedOwnerUid && !SAFE_DOC_ID_RE.test(requestedOwnerUid)) {
+      return res.status(400).json({ error: 'Invalid story owner reference.' });
+    }
+
+    const callerUid = req.firebaseUid!;
+    const callerToken = req.firebaseToken!;
+    const isOwnerRequest = !requestedOwnerUid || requestedOwnerUid === callerUid;
+    const docPath = isOwnerRequest
+      ? `users/${callerUid}/stories/${storyDocId}`
+      : `sharedFamilyStories/${storyDocId}`;
+
+    const firestoreResult = await fetchFirestoreDocAsCaller(docPath, callerToken);
+    if (!firestoreResult.doc) {
+      const status = firestoreResult.status === 403 ? 403 : 404;
+      return res.status(status).json({ error: 'Story not found or you do not have access.' });
+    }
+
+    const fields = firestoreResult.doc.fields;
+    if (!isOwnerRequest) {
+      const docOwner = fields?.ownerUid?.stringValue?.trim();
+      const docVis = fields?.visibility?.stringValue?.trim();
+      if (docOwner !== requestedOwnerUid || docVis !== 'family') {
+        return res.status(403).json({ error: 'You do not have access to this family story.' });
+      }
+    }
+
+    const storagePath = fields?.storagePath?.stringValue?.trim() || '';
+    const expectedOwner = isOwnerRequest ? callerUid : requestedOwnerUid;
+    if (!SAFE_STORAGE_PATH_RE.test(storagePath) || !storagePath.startsWith(`${expectedOwner}/`)) {
+      return res.status(404).json({ error: 'This story does not have a playable media file.' });
+    }
+
     const media = await fetchFamilyStoryObject(storagePath, req.header('range') || undefined);
-    if (!media.ok && media.status !== 206) return res.status(502).json({ error: 'Story media could not be loaded.' });
-    res.setHeader('Content-Type', media.headers.get('content-type') || 'application/octet-stream');
+    if (!media.ok && media.status !== 206) {
+      return res.status(502).json({ error: 'Story media could not be loaded.' });
+    }
+
+    const firestoreContentType = fields?.contentType?.stringValue?.trim() || '';
+    const responseContentType = ALLOWED_STORY_MIME_TYPES.has(firestoreContentType)
+      ? firestoreContentType
+      : media.headers.get('content-type') || 'application/octet-stream';
+
+    res.setHeader('Content-Type', responseContentType);
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     for (const header of ['content-length', 'content-range', 'accept-ranges']) {
@@ -526,22 +654,9 @@ app.get('/api/family/stories/:id/media', requireAuth, async (req: AuthRequest, r
     res.status(media.status);
     if (media.body) Readable.fromWeb(media.body as any).pipe(res);
     else res.end();
-  } catch (error: any) {
-    console.error('Error in GET /api/family/stories/:id/media:', error);
-    const status = String(error?.message || '').includes('access') ? 403 : 404;
-    res.status(status).json({ error: 'Story not found or you do not have access.' });
-  }
-});
-
-app.delete('/api/family/stories/:id', requireAuth, async (req: AuthRequest, res) => {
-  try {
-    const storyId = Number.parseInt(req.params.id, 10);
-    if (!Number.isInteger(storyId) || storyId < 1) return res.status(400).json({ error: 'A valid story is required.' });
-    const result = await deleteFamilyStory(req.dbUser!.id, storyId);
-    res.json(result);
-  } catch (error: any) {
-    console.error('Error in DELETE /api/family/stories/:id:', error);
-    res.status(404).json({ error: 'Story not found or could not be deleted.' });
+  } catch (error) {
+    console.error('Error in GET /api/family/stories/:storyDocId/media:', error);
+    res.status(500).json({ error: 'Story media could not be loaded.' });
   }
 });
 
