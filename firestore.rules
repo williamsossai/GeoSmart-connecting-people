@@ -778,8 +778,11 @@ service cloud.firestore {
       allow get: if isValidId(storyId) && (
         isAdmin()
         || (isVerifiedUser() && (
-          existing().ownerUid == request.auth.uid
-          || (request.auth.uid in existing().allowedUids)
+          (resource == null && exists(/databases/$(database)/documents/users/$(request.auth.uid)/stories/$(storyId)))
+          || (resource != null && (
+            existing().ownerUid == request.auth.uid
+            || (request.auth.uid in existing().allowedUids)
+          ))
         ))
       );
       allow list: if isBootstrapAdmin()
